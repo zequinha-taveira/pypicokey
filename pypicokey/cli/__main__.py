@@ -3,6 +3,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import print as rprint
 from typing import Optional
+from pathlib import Path
 
 from pypicokey import PicoKeyManager, DeviceMode
 from pypicokey.provisioning import DeviceProvisioner, ProvisioningConfig
@@ -97,6 +98,104 @@ def provision(
             rprint("[bold green]Success![/bold green] Device provisioned.")
         else:
             rprint(f"[bold red]Failed:[/bold red] {', '.join(result.errors)}")
+
+@app.command()
+def flash(
+    index: int = typer.Option(1, help="Index of the device to flash"),
+    file: Path = typer.Argument(..., help="Path to the UF2 firmware file")
+):
+    """Flash firmware to a device in Boot mode."""
+    manager = PicoKeyManager()
+    devices = manager.discover(mode_filter=DeviceMode.BOOT)
+    
+    if not devices:
+        rprint("[yellow]No Pico devices in BOOT mode found.[/yellow]")
+        rprint("Please connect your device while holding the BOOTSEL button.")
+        return
+        
+    if index > len(devices) or index < 1:
+        rprint(f"[red]Error: Device index {index} out of range.[/red]")
+        return
+        
+    device = devices[index - 1]
+    rprint(f"Flashing [bold]{device.name}[/bold] with [blue]{file.name}[/blue]...")
+    
+    from pypicokey.modules.boot import BootModule
+    
+    def progress_bar(current, total):
+        rprint(f"  Progress: [green]{current}%[/green]", end="\r")
+        if current == total: rprint("")
+
+    with device:
+        boot = BootModule(device)
+        try:
+            success = boot.flash_firmware(file, progress_callback=progress_bar)
+            if success:
+                rprint("[bold green]Success![/bold green] Firmware flashed. The device will reboot.")
+            else:
+                rprint("[bold red]Failed:[/bold red] Flashing verification failed.")
+        except Exception as e:
+            rprint(f"[bold red]Error:[/bold red] {e}")
+
+
+# HSM Subcommands
+hsm_app = typer.Typer(help="HSM management commands")
+app.add_typer(hsm_app, name="hsm")
+
+@hsm_app.command("list-keys")
+def hsm_list_keys(index: int = typer.Option(1, help="Index of the HSM device")):
+    """List keys on the HSM device."""
+    manager = PicoKeyManager()
+    devices = manager.discover(mode_filter=DeviceMode.HSM)
+    
+    if not devices:
+        rprint("[yellow]No HSM devices found.[/yellow]")
+        return
+        
+    device = devices[index - 1]
+    from pypicokey.modules.hsm import HSMModule
+    
+    with device:
+        hsm = HSMModule(device)
+        keys = hsm.list_keys()
+        
+        if not keys:
+            rprint("No keys found on device.")
+            return
+            
+        table = Table(title=f"Keys on {device.name}")
+        table.add_column("Slot", style="cyan")
+        table.add_column("Label", style="green")
+        table.add_column("Type", style="magenta")
+        table.add_column("Size", style="yellow")
+        
+        for k in keys:
+            table.add_row(str(k.slot), k.label, k.key_type, str(k.key_size))
+        
+        console.print(table)
+
+@hsm_app.command("generate-key")
+def hsm_gen_key(
+    index: int = typer.Option(1, help="Index of the HSM device"),
+    label: str = typer.Option(..., help="Label for the new key"),
+    type: str = typer.Option("rsa", help="Key type (rsa, ec)")
+):
+    """Generate a new key pair on the HSM."""
+    manager = PicoKeyManager()
+    devices = manager.discover(mode_filter=DeviceMode.HSM)
+    
+    if not devices:
+        rprint("[yellow]No HSM devices found.[/yellow]")
+        return
+        
+    device = devices[index - 1]
+    from pypicokey.modules.hsm import HSMModule
+    
+    with device:
+        hsm = HSMModule(device)
+        rprint(f"Generating {type.upper()} key '[bold]{label}[/bold]'...")
+        key = hsm.generate_key(label, key_type=type.upper())
+        rprint(f"[bold green]Success![/bold green] Key generated in slot {key.slot}.")
 
 if __name__ == "__main__":
     app()

@@ -13,81 +13,31 @@ import logging
 from pypicokey.device import PicoKeyDevice
 from pypicokey.constants import DeviceMode
 from pypicokey.exceptions import UnsupportedModeError, CommunicationError
+from pypicokey.transport.msd import MSDTransport
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class BootInfo:
-    """Bootloader information.
-    
-    Attributes:
-        bootloader_version: Bootloader version string.
-        board_id: Board identifier.
-        board_revision: Board revision.
-        flash_size: Flash memory size in bytes.
-        family_id: RP2 family identifier.
-    """
+    """Bootloader information."""
     
     bootloader_version: Optional[str] = None
     board_id: Optional[str] = None
     board_revision: Optional[str] = None
     flash_size: int = 0
     family_id: Optional[str] = None
-
-
-@dataclass
-class FirmwareInfo:
-    """Firmware file information.
-    
-    Attributes:
-        path: Path to firmware file.
-        size: File size in bytes.
-        version: Firmware version (if detectable).
-        checksum: File checksum.
-    """
-    
-    path: Path
-    size: int
-    version: Optional[str] = None
-    checksum: Optional[str] = None
-
-
-# Progress callback type
-ProgressCallback = Callable[[int, int], None]
+    info_raw: str = ""
 
 
 class BootModule:
-    """Bootloader operations for Pico devices in boot mode.
-    
-    This module provides functionality for flashing firmware on
-    Pico devices when they are in bootloader (BOOTSEL) mode.
-    
-    Example:
-        >>> from pypicokey import PicoKeyManager
-        >>> from pypicokey.modules import BootModule
-        >>> 
-        >>> manager = PicoKeyManager()
-        >>> device = manager.get_device(mode=DeviceMode.BOOT)
-        >>> 
-        >>> with device:
-        ...     boot = BootModule(device)
-        ...     info = boot.get_info()
-        ...     print(f"Bootloader: {info.bootloader_version}")
-    
-    Note:
-        This is a stub implementation. Full bootloader functionality
-        will be implemented in Phase 4.
-    """
+    """Bootloader operations for Pico devices in boot mode."""
     
     def __init__(self, device: PicoKeyDevice) -> None:
         """Initialize Boot module.
         
         Args:
             device: Connected PicoKeyDevice instance.
-            
-        Raises:
-            UnsupportedModeError: If device is not in Boot mode.
         """
         if device.mode != DeviceMode.BOOT:
             raise UnsupportedModeError(
@@ -97,112 +47,69 @@ class BootModule:
             )
         
         self._device = device
-    
+        self._msd = None
+
+    def _ensure_msd(self) -> MSDTransport:
+        if self._msd is None:
+            # Check if device already has an MSD transport
+            if isinstance(self._device._transport, MSDTransport):
+                self._msd = self._device._transport
+            else:
+                # Try to discover it
+                mount = MSDTransport.discover_mount_point()
+                if not mount:
+                    raise CommunicationError("RP2040 BOOTSEL drive not found or not mounted")
+                self._msd = MSDTransport(mount)
+                self._msd.open()
+        return self._msd
+
     def get_info(self) -> BootInfo:
-        """Get bootloader information.
+        """Get bootloader information by reading INFO_UF2.TXT."""
+        msd = self._ensure_msd()
+        text = msd.get_info_text()
         
-        Returns:
-            BootInfo with bootloader details.
-            
-        Raises:
-            CommunicationError: If command fails.
-        """
-        # TODO: Implement bootloader info retrieval
-        logger.warning("BootModule.get_info() is a stub - returning placeholder data")
+        info = BootInfo(info_raw=text)
         
-        return BootInfo(
-            bootloader_version="1.0.0",
-            board_id="rp2040",
-            board_revision="B2",
-            flash_size=2 * 1024 * 1024,  # 2MB
-            family_id="0xe48bff56",
-        )
-    
-    def validate_firmware(self, firmware_path: Path) -> FirmwareInfo:
-        """Validate a firmware file before flashing.
-        
-        Checks that the firmware file is valid UF2 format and
-        compatible with the device.
-        
-        Args:
-            firmware_path: Path to the firmware file (.uf2).
-            
-        Returns:
-            FirmwareInfo with file details.
-            
-        Raises:
-            ValueError: If firmware file is invalid.
-        """
-        # TODO: Implement UF2 validation
-        logger.warning("BootModule.validate_firmware() is not yet implemented")
-        
-        if not firmware_path.exists():
-            raise ValueError(f"Firmware file not found: {firmware_path}")
-        
-        if not firmware_path.suffix.lower() == ".uf2":
-            raise ValueError(f"Invalid firmware format, expected .uf2: {firmware_path}")
-        
-        return FirmwareInfo(
-            path=firmware_path,
-            size=firmware_path.stat().st_size,
-        )
+        # Parse basic fields from INFO_UF2.TXT
+        # Format: Field: Value
+        for line in text.splitlines():
+            if ":" in line:
+                key, val = [s.strip() for s in line.split(":", 1)]
+                if key == "UF2 Bootloader":
+                    info.bootloader_version = val
+                elif key == "Board-ID":
+                    info.board_id = val
+                elif key == "Family-ID":
+                    info.family_id = val
+
+        return info
     
     def flash_firmware(
         self,
         firmware_path: Path,
-        progress_callback: Optional[ProgressCallback] = None,
-        verify: bool = True,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> bool:
-        """Flash firmware to the device.
+        """Flash firmware to the device by copying the UF2 file."""
+        msd = self._ensure_msd()
         
-        Args:
-            firmware_path: Path to the firmware file (.uf2).
-            progress_callback: Optional callback for progress updates.
-                              Called with (bytes_written, total_bytes).
-            verify: Whether to verify after flashing.
-            
-        Returns:
-            True if flashing was successful.
-            
-        Raises:
-            ValueError: If firmware file is invalid.
-            CommunicationError: If flashing fails.
-        """
-        # TODO: Implement firmware flashing
-        logger.warning("BootModule.flash_firmware() is not yet implemented")
-        raise NotImplementedError("Boot flash_firmware not yet implemented")
-    
-    def reboot(self, to_bootloader: bool = False) -> bool:
-        """Reboot the device.
+        if not firmware_path.exists():
+            raise ValueError(f"Firmware file not found: {firmware_path}")
         
-        Args:
-            to_bootloader: If True, reboot into bootloader mode.
+        if firmware_path.suffix.lower() != ".uf2":
+            raise ValueError(f"Invalid format, expected .uf2: {firmware_path}")
             
-        Returns:
-            True if reboot command was sent.
+        try:
+            if progress_callback:
+                progress_callback(0, 100) # Start
             
-        Raises:
-            CommunicationError: If command fails.
-        """
-        # TODO: Implement reboot command
-        logger.warning("BootModule.reboot() is not yet implemented")
-        raise NotImplementedError("Boot reboot not yet implemented")
-    
-    def erase_flash(self) -> bool:
-        """Erase the entire flash memory.
-        
-        WARNING: This will delete all data including the current firmware.
-        
-        Returns:
-            True if erase was successful.
+            success = msd.copy_file(firmware_path)
             
-        Raises:
-            CommunicationError: If command fails.
-        """
-        # TODO: Implement flash erase
-        logger.warning("BootModule.erase_flash() is not yet implemented")
-        raise NotImplementedError("Boot erase_flash not yet implemented")
-    
+            if progress_callback:
+                progress_callback(100, 100) # End
+                
+            return success
+        except Exception as e:
+            raise CommunicationError(f"Flashing failed: {e}") from e
+
     def __repr__(self) -> str:
-        """Return string representation."""
         return f"BootModule({self._device.name})"

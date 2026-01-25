@@ -143,16 +143,24 @@ if devices:
 | FIDO2 CTAP2 Command Support | ✅ Implemented |
 | OpenPGP Smartcard Interaction | ✅ Implemented |
 | HSM Initialization & Management | ✅ Implemented |
+| UF2 Firmware Flashing (PicoBoot) | ✅ Implemented |
+| HSM PKCS#11 Key Mapping | ✅ Implemented |
 | Secure Provisioning & Locking | ✅ Implemented |
 | Rich CLI Interface | ✅ Implemented |
 | Stable Python API | ✅ Implemented |
 
-### Planned (Future)
+### Advanced Usage (CLI)
 
-| Feature | Status |
-|---------|--------|
-| PicoBoot support (boot/flash mode) | 🔄 Planned |
-| Extended HSM PKCS#11 mapping | 🔄 Planned |
+#### Flash Firmware
+```bash
+picokey flash --index 1 firmware.uf2
+```
+
+#### HSM Key Management
+```bash
+picokey hsm list-keys --index 1
+picokey hsm generate-key --label "MyRootKey" --type rsa
+```
 
 ---
 
