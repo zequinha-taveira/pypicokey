@@ -211,14 +211,13 @@ class PicoKeyManager:
                 if (vid, pid) in KNOWN_DEVICES:
                     name, mode = KNOWN_DEVICES[(vid, pid)]
                     
-                    # For HID, verify it's a FIDO interface
+                    # For HID, identify interface usage
                     usage_page = dev_info.get("usage_page", 0)
                     usage = dev_info.get("usage", 0)
+                    interface = dev_info.get("interface_number", -1)
                     
-                    # If usage info is available, filter for FIDO
-                    # On some OSs/drivers, usage_page 0xF1D0 is the indicator
-                    if usage_page != 0 and usage_page != FIDO_USAGE_PAGE:
-                        continue
+                    # Log finding
+                    logger.debug(f"Known device found: {name} (IF: {interface}, UP: {usage_page:04X}, U: {usage:04X})")
 
                     info = DeviceInfo(
                         vendor_id=vid,
@@ -235,9 +234,10 @@ class PicoKeyManager:
                     # Add usage info to extra data
                     info.extra["usage_page"] = usage_page
                     info.extra["usage"] = usage
+                    info.extra["interface"] = interface
                     
                     devices.append(PicoKeyDevice(info))
-                    logger.debug(f"Found HID device: {name} at {info.path} (UsagePage: {usage_page:04X})")
+                    logger.debug(f"Added HID device: {name} at {info.path}")
         
         except ImportError:
             logger.warning("hidapi not available, skipping HID scan")

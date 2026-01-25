@@ -8,7 +8,7 @@ used throughout the library.
 from enum import Enum, IntEnum
 
 
-class VendorID(IntEnum):
+class VendorID:
     """USB Vendor IDs for PicoKey devices."""
     
     # Raspberry Pi Foundation (used by some Pico-based devices)
@@ -20,8 +20,11 @@ class VendorID(IntEnum):
     # Generic HID vendor (for development/testing)
     GENERIC = 0x0000
 
+    # Community vendor ID (for Pico Key Web)
+    COMMUNITY = 0xFEFF
 
-class ProductID(IntEnum):
+
+class ProductID:
     """USB Product IDs for PicoKey devices."""
     
     # Pico FIDO2 devices
@@ -40,6 +43,7 @@ class ProductID(IntEnum):
     
     # Development/unknown
     UNKNOWN = 0x0000
+    PICO_KEY_WEB = 0xFCFD
 
 
 class DeviceMode(str, Enum):
@@ -108,6 +112,8 @@ KNOWN_DEVICES: dict[tuple[int, int], tuple[str, DeviceMode]] = {
     (VendorID.PICOKEYS, ProductID.PICO_HSM): ("Pico HSM", DeviceMode.HSM),
     (VendorID.PICOKEYS, ProductID.PICO_HSM_PLUS): ("Pico HSM Plus", DeviceMode.HSM),
     (VendorID.PICOKEYS, ProductID.PICO_BOOT): ("Pico Boot", DeviceMode.BOOT),
+    # Pico Key Community/Web Interface
+    (VendorID.COMMUNITY, ProductID.PICO_KEY_WEB): ("Pico Key", DeviceMode.FIDO),
 }
 
 

@@ -5,6 +5,10 @@ This module provides secure lock features for protecting
 PicoKey device configurations.
 """
 
+from typing import Optional
+from dataclasses import dataclass
+import logging
+
 from pypicokey.device import PicoKeyDevice
 from pypicokey.exceptions import ProvisioningError, CommunicationError
 

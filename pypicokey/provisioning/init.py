@@ -5,6 +5,10 @@ This module provides device initialization and provisioning
 functionality for PicoKey devices.
 """
 
+from typing import Optional, Any
+from dataclasses import dataclass
+import logging
+
 from pypicokey.device import PicoKeyDevice
 from pypicokey.constants import DeviceMode
 from pypicokey.exceptions import ProvisioningError, CommunicationError
