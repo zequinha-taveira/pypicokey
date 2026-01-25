@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pypicokey"
+version = "0.1.0"
+description = "Open-source Python library for managing PicoKey devices (Pico FIDO, Pico OpenPGP, Pico HSM, Pico Boot)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "PicoKey Community Contributors"}
+]
+keywords = [
+    "picokey",
+    "fido2",
+    "openpgp",
+    "hsm",
+    "security",
+    "hardware-security",
+    "usb",
+    "smartcard"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "pyusb>=1.2.0",
+    "hidapi>=0.14.0",
+    "pyscard>=2.0.0",
+]
+
+[project.optional-dependencies]
+fido = ["fido2>=1.1.0"]
+crypto = ["cryptography>=41.0.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+all = ["pypicokey[fido,crypto,dev]"]
+
+[project.urls]
+Homepage = "https://github.com/picokey-community/pypicokey"
+Documentation = "https://github.com/picokey-community/pypicokey#readme"
+Repository = "https://github.com/picokey-community/pypicokey.git"
+Issues = "https://github.com/picokey-community/pypicokey/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pypicokey"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
