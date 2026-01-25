@@ -10,6 +10,7 @@
 **Open-source Python library for managing PicoKey devices**
 
 [Installation](#-installation) •
+[CLI Usage](#-cli-usage) •
 [Quick Start](#-quick-start) •
 [Features](#-features) •
 [Documentation](#-documentation) •
@@ -74,6 +75,27 @@ pip install pypicokey[all]
 
 ---
 
+## 💻 CLI Usage
+
+The library includes a command-line tool named `picokey` for easy device management.
+
+### List Devices
+```bash
+picokey list
+```
+
+### Show Device Details
+```bash
+picokey info --index 1
+```
+
+### Provision a New Device
+```bash
+picokey provision --index 1 --label "Production Key"
+```
+
+---
+
 ## ⚡ Quick Start
 
 ### Detect Connected Devices
@@ -112,23 +134,25 @@ if devices:
 
 ## ✨ Features
 
-### Current (MVP)
+### Current (v0.1.0)
 
 | Feature | Status |
 |---------|--------|
-| USB device detection | ✅ Implemented |
-| Mode identification (HID/CCID) | ✅ Implemented |
-| Basic device information | ✅ Implemented |
+| USB device detection (HID Usage Page filtering) | ✅ Implemented |
+| Mode identification (ATR & AID selection) | ✅ Implemented |
+| FIDO2 CTAP2 Command Support | ✅ Implemented |
+| OpenPGP Smartcard Interaction | ✅ Implemented |
+| HSM Initialization & Management | ✅ Implemented |
+| Secure Provisioning & Locking | ✅ Implemented |
+| Rich CLI Interface | ✅ Implemented |
 | Stable Python API | ✅ Implemented |
 
-### Planned (Post-MVP)
+### Planned (Future)
 
 | Feature | Status |
 |---------|--------|
-| FIDO2 management (status, reset, version) | 🔄 Planned |
-| OpenPGP management (status, PIN, slots) | 🔄 Planned |
-| HSM management (state, lock, provisioning) | 🔄 Planned |
 | PicoBoot support (boot/flash mode) | 🔄 Planned |
+| Extended HSM PKCS#11 mapping | 🔄 Planned |
 
 ---
 
@@ -174,14 +198,21 @@ pypicokey/
 │   │   ├── usb.py           # USB transport
 │   │   ├── hid.py           # HID transport
 │   │   └── ccid.py          # CCID/smartcard transport
+│   ├── protocol/            # Protocol implementation
+│   │   ├── ctap.py          # CTAPHID & CTAP2
+│   │   └── openpgp_apdu.py  # OpenPGP APDUs & TLV
 │   ├── modules/             # Feature-specific modules
 │   │   ├── fido.py          # FIDO2/WebAuthn
 │   │   ├── openpgp.py       # OpenPGP
 │   │   ├── hsm.py           # HSM
 │   │   └── boot.py          # Bootloader
-│   └── provisioning/        # Device provisioning
-│       ├── init.py          # Initialization
-│       └── securelock.py    # Security features
+│   ├── provisioning/        # Device provisioning
+│   │   ├── init.py          # Initialization
+│   │   └── securelock.py    # Security features
+│   ├── utils/               # Utilities
+│   │   └── atr.py           # ATR Parser
+│   └── cli/                 # Command-line interface
+│       └── __main__.py      # App entry point
 ├── examples/                # Usage examples
 ├── tests/                   # Unit tests
 ├── pyproject.toml

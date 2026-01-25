@@ -12,23 +12,14 @@ import logging
 from pypicokey.device import PicoKeyDevice
 from pypicokey.constants import DeviceMode, OpenPGPInstruction
 from pypicokey.exceptions import UnsupportedModeError, CommunicationError
+from pypicokey.protocol.openpgp_apdu import OpenPGPAPDU, TLVParser
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class OpenPGPInfo:
-    """OpenPGP card information.
-    
-    Attributes:
-        aid: Application Identifier.
-        version: OpenPGP version (e.g., "3.4").
-        manufacturer: Manufacturer ID.
-        serial_number: Card serial number.
-        pin_retries: Tuple of (user PIN, reset code, admin PIN) retries.
-        signature_count: Number of signatures performed.
-        key_slots: Information about key slots.
-    """
+    """OpenPGP card information."""
     
     aid: Optional[bytes] = None
     version: Optional[str] = None
@@ -48,64 +39,30 @@ class OpenPGPInfo:
     
     @property
     def user_pin_retries(self) -> int:
-        """Get user PIN retries remaining."""
         return self.pin_retries[0]
     
     @property
     def admin_pin_retries(self) -> int:
-        """Get admin PIN retries remaining."""
         return self.pin_retries[2]
-    
-    @property
-    def has_signature_key(self) -> bool:
-        """Check if signature key is present."""
-        return bool(self.key_slots.get("signature", {}).get("fingerprint"))
-    
-    @property
-    def has_encryption_key(self) -> bool:
-        """Check if encryption key is present."""
-        return bool(self.key_slots.get("encryption", {}).get("fingerprint"))
-    
-    @property
-    def has_authentication_key(self) -> bool:
-        """Check if authentication key is present."""
-        return bool(self.key_slots.get("authentication", {}).get("fingerprint"))
 
 
 class OpenPGPModule:
-    """OpenPGP operations for Pico OpenPGP devices.
-    
-    This module provides high-level methods for interacting with
-    OpenPGP smartcard functionality.
-    
-    Example:
-        >>> from pypicokey import PicoKeyManager
-        >>> from pypicokey.modules import OpenPGPModule
-        >>> 
-        >>> manager = PicoKeyManager()
-        >>> device = manager.get_device(mode=DeviceMode.OPENPGP)
-        >>> 
-        >>> with device:
-        ...     openpgp = OpenPGPModule(device)
-        ...     info = openpgp.get_info()
-        ...     print(f"Version: {info.version}")
-    
-    Note:
-        This is a stub implementation. Full OpenPGP functionality
-        will be implemented in Phase 3.
-    """
+    """OpenPGP operations for Pico OpenPGP devices."""
     
     # OpenPGP AID
     AID = bytes.fromhex("D27600012401")
+    
+    # OpenPGP Tags
+    TAG_AID = 0x004F
+    TAG_LOGIN = 0x005E
+    TAG_HISTORICAL = 0x5F52
+    TAG_PW_STATUS = 0x00C4
     
     def __init__(self, device: PicoKeyDevice) -> None:
         """Initialize OpenPGP module.
         
         Args:
             device: Connected PicoKeyDevice instance.
-            
-        Raises:
-            UnsupportedModeError: If device is not in OpenPGP mode.
         """
         if device.mode != DeviceMode.OPENPGP:
             raise UnsupportedModeError(
@@ -116,60 +73,90 @@ class OpenPGPModule:
         
         self._device = device
         self._selected = False
-    
+
+    def _ensure_selected(self) -> None:
+        if not self._selected:
+            self.select()
+
     def select(self) -> bool:
-        """Select the OpenPGP application.
-        
-        Must be called before other operations.
-        
-        Returns:
-            True if selection was successful.
-            
-        Raises:
-            CommunicationError: If command fails.
-        """
-        # TODO: Implement SELECT command
-        logger.warning("OpenPGPModule.select() is a stub")
-        self._selected = True
-        return True
+        """Select the OpenPGP application."""
+        try:
+            # The device.connect() should have been called outside
+            # We use the raw transport from the device
+            from pypicokey.transport.ccid import CCIDTransport
+            if not isinstance(self._device._transport, CCIDTransport):
+                raise CommunicationError("Device transport is not CCID")
+                
+            response, sw1, sw2 = self._device._transport.select_application(self.AID)
+            if sw1 == 0x90 and sw2 == 0x00:
+                self._selected = True
+                return True
+            else:
+                raise CommunicationError(f"Failed to select OpenPGP application: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            raise CommunicationError(f"OpenPGP selection failed: {e}") from e
     
     def get_info(self) -> OpenPGPInfo:
-        """Get OpenPGP card information.
+        """Get OpenPGP card information via GET DATA commands."""
+        self._ensure_selected()
         
-        Returns:
-            OpenPGPInfo with card details.
+        try:
+            # 1. Get PW Status (retries)
+            resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xCA, 0x00, 0xC4, le=0)
+            pin_retries = (3, 0, 3)
+            if sw1 == 0x90 and len(resp) >= 7:
+                pin_retries = (resp[4], resp[5], resp[6])
+                
+            # 2. Get AID/Serial
+            resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xCA, 0x00, 0x4F, le=0)
+            serial = resp.hex() if sw1 == 0x90 else None
             
-        Raises:
-            CommunicationError: If command fails.
-        """
-        # TODO: Implement GET DATA commands for card info
-        logger.warning("OpenPGPModule.get_info() is a stub - returning placeholder data")
-        
-        return OpenPGPInfo(
-            aid=self.AID,
-            version="3.4",
-            manufacturer="PicoKeys",
-            serial_number="00000000",
-            pin_retries=(3, 0, 3),
-            signature_count=0,
-        )
+            # 3. Get Application Related Data (0x6E)
+            # This is a large TLV block with lots of info
+            resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xCA, 0x00, 0x6E, le=0)
+            version = "unknown"
+            if sw1 == 0x90:
+                # Parse TLV to find version and other fields
+                tags = TLVParser.parse(resp)
+                # Historical bytes might have version
+                hist = tags.get(0x5F52, b"")
+                if len(hist) >= 4:
+                    version = f"{hist[2]}.{hist[3]}"
+
+            return OpenPGPInfo(
+                aid=self.AID,
+                version=version,
+                serial_number=serial,
+                pin_retries=pin_retries,
+                manufacturer="PicoKeys"
+            )
+            
+        except Exception as e:
+            raise CommunicationError(f"Failed to get OpenPGP info: {e}") from e
     
     def verify_pin(self, pin: str, admin: bool = False) -> bool:
-        """Verify user or admin PIN.
-        
-        Args:
-            pin: PIN to verify.
-            admin: If True, verify admin PIN; otherwise user PIN.
+        """Verify user or admin PIN."""
+        self._ensure_selected()
+        try:
+            p2 = 0x83 if admin else 0x81
+            pin_bytes = pin.encode("utf-8")
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x20, 0x00, p2, data=pin_bytes)
             
-        Returns:
-            True if PIN was verified.
-            
-        Raises:
-            CommunicationError: If verification fails.
-        """
-        # TODO: Implement VERIFY command
-        logger.warning("OpenPGPModule.verify_pin() is not yet implemented")
-        raise NotImplementedError("OpenPGP verify_pin not yet implemented")
+            if sw1 == 0x90:
+                return True
+            elif sw1 == 0x63:
+                retries = sw2 & 0x0F
+                from pypicokey.exceptions import AuthenticationError
+                raise AuthenticationError("Incorrect PIN", retries_remaining=retries)
+            else:
+                raise CommunicationError(f"PIN verification failed: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            if not isinstance(e, (CommunicationError, AuthenticationError)):
+                raise CommunicationError(f"PIN verification error: {e}") from e
+            raise
+
+    def __repr__(self) -> str:
+        return f"OpenPGPModule({self._device.name})"
     
     def change_pin(self, old_pin: str, new_pin: str, admin: bool = False) -> bool:
         """Change user or admin PIN.

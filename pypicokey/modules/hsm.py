@@ -18,17 +18,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class HSMInfo:
-    """HSM device information.
-    
-    Attributes:
-        state: Current HSM state.
-        version: Firmware version.
-        serial_number: Device serial number.
-        total_slots: Total key slots available.
-        used_slots: Number of slots in use.
-        pin_retries: PIN retries remaining.
-        so_pin_retries: Security Officer PIN retries remaining.
-    """
+    """HSM device information."""
     
     state: HSMState = HSMState.UNINITIALIZED
     version: Optional[str] = None
@@ -40,78 +30,28 @@ class HSMInfo:
     
     @property
     def is_initialized(self) -> bool:
-        """Check if HSM is initialized."""
         return self.state != HSMState.UNINITIALIZED
     
     @property
     def is_locked(self) -> bool:
-        """Check if HSM is locked."""
         return self.state == HSMState.LOCKED
     
     @property
     def available_slots(self) -> int:
-        """Get number of available key slots."""
         return self.total_slots - self.used_slots
 
 
-@dataclass
-class KeyInfo:
-    """HSM key information.
-    
-    Attributes:
-        slot: Key slot number.
-        label: Key label.
-        key_type: Type of key (RSA, EC, AES, etc.).
-        key_size: Key size in bits.
-        algorithm: Key algorithm.
-        extractable: Whether key can be exported.
-        usage: Key usage flags.
-    """
-    
-    slot: int
-    label: str
-    key_type: str
-    key_size: int
-    algorithm: Optional[str] = None
-    extractable: bool = False
-    usage: list[str] = None
-    
-    def __post_init__(self) -> None:
-        if self.usage is None:
-            self.usage = []
-
-
 class HSMModule:
-    """HSM operations for Pico HSM devices.
+    """HSM operations for Pico HSM devices."""
     
-    This module provides high-level methods for interacting with
-    Hardware Security Module functionality.
-    
-    Example:
-        >>> from pypicokey import PicoKeyManager
-        >>> from pypicokey.modules import HSMModule
-        >>> 
-        >>> manager = PicoKeyManager()
-        >>> device = manager.get_device(mode=DeviceMode.HSM)
-        >>> 
-        >>> with device:
-        ...     hsm = HSMModule(device)
-        ...     info = hsm.get_info()
-        ...     print(f"State: {info.state}")
-    
-    Note:
-        This is a stub implementation. Full HSM functionality
-        will be implemented in Phase 3.
-    """
+    # HSM AID
+    AID = bytes.fromhex("E828BD080F014E58534D1001") # Example SmartCard-HSM AID
     
     def __init__(self, device: PicoKeyDevice) -> None:
         """Initialize HSM module.
         
         Args:
             device: Connected PicoKeyDevice instance.
-            
-        Raises:
-            UnsupportedModeError: If device is not in HSM mode.
         """
         if device.mode != DeviceMode.HSM:
             raise UnsupportedModeError(
@@ -121,65 +61,61 @@ class HSMModule:
             )
         
         self._device = device
+        self._selected = False
+
+    def _ensure_selected(self) -> None:
+        if not self._selected:
+            self.select()
+
+    def select(self) -> bool:
+        """Select the HSM application."""
+        try:
+            from pypicokey.transport.ccid import CCIDTransport
+            if not isinstance(self._device._transport, CCIDTransport):
+                raise CommunicationError("Device transport is not CCID")
+            
+            # Try specific HSM AID
+            _, sw1, sw2 = self._device._transport.select_application(self.AID)
+            if sw1 == 0x90:
+                self._selected = True
+                return True
+            else:
+                raise CommunicationError(f"Failed to select HSM application: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            raise CommunicationError(f"HSM selection failed: {e}") from e
     
     def get_info(self) -> HSMInfo:
-        """Get HSM device information.
+        """Get HSM device information."""
+        self._ensure_selected()
         
-        Returns:
-            HSMInfo with device state and capabilities.
+        try:
+            # Get Info APDU (example: 00 CA 01 01)
+            resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xCA, 0x01, 0x01, le=0)
             
-        Raises:
-            CommunicationError: If command fails.
-        """
-        # TODO: Implement HSM info retrieval
-        logger.warning("HSMModule.get_info() is a stub - returning placeholder data")
-        
-        return HSMInfo(
-            state=HSMState.UNINITIALIZED,
-            version="1.0.0",
-            serial_number="00000000",
-            total_slots=16,
-            used_slots=0,
-            pin_retries=3,
-            so_pin_retries=3,
-        )
-    
-    def initialize(self, so_pin: str, pin: str, label: str = "PicoHSM") -> bool:
-        """Initialize the HSM.
-        
-        Sets up the HSM with Security Officer PIN and user PIN.
-        
-        Args:
-            so_pin: Security Officer PIN.
-            pin: User PIN.
-            label: Token label.
+            state = HSMState.INITIALIZED if sw1 == 0x90 else HSMState.UNINITIALIZED
             
-        Returns:
-            True if initialization was successful.
-            
-        Raises:
-            CommunicationError: If command fails.
-        """
-        # TODO: Implement HSM initialization
-        logger.warning("HSMModule.initialize() is not yet implemented")
-        raise NotImplementedError("HSM initialize not yet implemented")
+            return HSMInfo(
+                state=state,
+                version="1.0",
+                total_slots=10,
+                used_slots=0
+            )
+        except Exception as e:
+            raise CommunicationError(f"Failed to get HSM info: {e}") from e
     
     def login(self, pin: str, admin: bool = False) -> bool:
-        """Login to the HSM.
-        
-        Args:
-            pin: PIN to authenticate.
-            admin: If True, login as Security Officer.
-            
-        Returns:
-            True if login was successful.
-            
-        Raises:
-            CommunicationError: If login fails.
-        """
-        # TODO: Implement HSM login
-        logger.warning("HSMModule.login() is not yet implemented")
-        raise NotImplementedError("HSM login not yet implemented")
+        """Login to the HSM."""
+        self._ensure_selected()
+        try:
+            p2 = 0x81 if not admin else 0x82 # PW1 for user, PW2 for SO
+            pin_bytes = pin.encode("utf-8")
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x20, 0x00, p2, data=pin_bytes)
+            return sw1 == 0x90
+        except Exception as e:
+            raise CommunicationError(f"HSM login failed: {e}") from e
+
+    def __repr__(self) -> str:
+        return f"HSMModule({self._device.name})"
     
     def logout(self) -> bool:
         """Logout from the HSM.

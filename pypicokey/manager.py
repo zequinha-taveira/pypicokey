@@ -18,8 +18,13 @@ from pypicokey.constants import (
     InterfaceClass,
 )
 from pypicokey.exceptions import DeviceNotFoundError
+from pypicokey.utils.atr import ATRParser
 
 logger = logging.getLogger(__name__)
+
+# FIDO2 HID constants
+FIDO_USAGE_PAGE = 0xF1D0
+FIDO_USAGE_U2F = 0x01
 
 
 class PicoKeyManager:
@@ -44,6 +49,7 @@ class PicoKeyManager:
         """Initialize the PicoKeyManager."""
         self._cached_devices: list[PicoKeyDevice] = []
         self._use_cache = False
+        self._atr_parser = ATRParser()
     
     def discover(
         self,
@@ -205,6 +211,15 @@ class PicoKeyManager:
                 if (vid, pid) in KNOWN_DEVICES:
                     name, mode = KNOWN_DEVICES[(vid, pid)]
                     
+                    # For HID, verify it's a FIDO interface
+                    usage_page = dev_info.get("usage_page", 0)
+                    usage = dev_info.get("usage", 0)
+                    
+                    # If usage info is available, filter for FIDO
+                    # On some OSs/drivers, usage_page 0xF1D0 is the indicator
+                    if usage_page != 0 and usage_page != FIDO_USAGE_PAGE:
+                        continue
+
                     info = DeviceInfo(
                         vendor_id=vid,
                         product_id=pid,
@@ -212,13 +227,17 @@ class PicoKeyManager:
                         mode=mode,
                         serial_number=dev_info.get("serial_number"),
                         transport_type=TransportType.HID,
-                        path=dev_info.get("path", b"").decode("utf-8", errors="ignore"),
+                        path=dev_info.get("path", b"").decode("utf-8", errors="ignore") if isinstance(dev_info.get("path"), bytes) else str(dev_info.get("path", "")),
                         manufacturer=dev_info.get("manufacturer_string"),
                         product=dev_info.get("product_string"),
                     )
                     
+                    # Add usage info to extra data
+                    info.extra["usage_page"] = usage_page
+                    info.extra["usage"] = usage
+                    
                     devices.append(PicoKeyDevice(info))
-                    logger.debug(f"Found HID device: {name} at {info.path}")
+                    logger.debug(f"Found HID device: {name} at {info.path} (UsagePage: {usage_page:04X})")
         
         except ImportError:
             logger.warning("hidapi not available, skipping HID scan")
@@ -243,18 +262,44 @@ class PicoKeyManager:
                 reader_name = str(reader)
                 logger.debug(f"Found reader: {reader_name}")
                 
-                # Check if this is a PicoKey reader by name
-                if "Pico" in reader_name:
-                    # Determine mode from reader name
-                    if "OpenPGP" in reader_name:
-                        mode = DeviceMode.OPENPGP
-                        name = "Pico OpenPGP"
-                    elif "HSM" in reader_name:
-                        mode = DeviceMode.HSM
-                        name = "Pico HSM"
-                    else:
-                        mode = DeviceMode.UNKNOWN
-                        name = "Pico Device"
+                # Check if this is a PicoKey reader by name or ATR
+                is_pico = "Pico" in reader_name
+                
+                try:
+                    connection = reader.createConnection()
+                    connection.connect()
+                    atr = bytes(connection.getATR())
+                    connection.disconnect()
+                    
+                    atr_info = self._atr_parser.parse(atr)
+                    if atr_info.card_type != "unknown" or "pico" in atr_info.historical_bytes.decode('ascii', errors='ignore').lower():
+                        is_pico = True
+                except Exception as e:
+                    logger.debug(f"Could not read ATR from {reader_name}: {e}")
+                    atr = b""
+                    atr_info = None
+
+                if is_pico:
+                    # Determine mode from ATR, AID selection or reader name
+                    mode = DeviceMode.UNKNOWN
+                    name = "Pico Device"
+                    
+                    if atr_info:
+                        if atr_info.card_type == "openpgp":
+                            mode = DeviceMode.OPENPGP
+                            name = "Pico OpenPGP"
+                        elif atr_info.card_type == "hsm":
+                            mode = DeviceMode.HSM
+                            name = "Pico HSM"
+
+                    # Fallback to reader name if mode still unknown
+                    if mode == DeviceMode.UNKNOWN:
+                        if "OpenPGP" in reader_name:
+                            mode = DeviceMode.OPENPGP
+                            name = "Pico OpenPGP"
+                        elif "HSM" in reader_name:
+                            mode = DeviceMode.HSM
+                            name = "Pico HSM"
                     
                     info = DeviceInfo(
                         vendor_id=VendorID.PICOKEYS,
@@ -266,8 +311,11 @@ class PicoKeyManager:
                         manufacturer="PicoKeys",
                     )
                     
+                    if atr:
+                        info.extra["atr"] = atr.hex()
+                    
                     devices.append(PicoKeyDevice(info))
-                    logger.debug(f"Found CCID device: {name}")
+                    logger.debug(f"Found CCID device: {name} (Mode: {mode})")
         
         except ImportError:
             logger.warning("pyscard not available, skipping CCID scan")

@@ -232,6 +232,31 @@ class CCIDTransport(BaseTransport):
         """
         return self.send_apdu(0x00, 0xA4, 0x04, 0x00, aid)
     
+    def detect_active_application(self) -> str:
+        """Detect which known application is active on the card.
+        
+        Tries to select known AIDs and returns the name of the first successful one.
+        
+        Returns:
+            Application name ("openpgp", "piv", "fido", "oath", or "unknown").
+        """
+        apps = {
+            "openpgp": AID.OPENPGP,
+            "fido": AID.FIDO,
+            "piv": AID.PIV,
+            "oath": AID.OATH,
+        }
+        
+        for name, aid in apps.items():
+            try:
+                _, sw1, sw2 = self.select_application(aid)
+                if sw1 == 0x90 and sw2 == 0x00:
+                    return name
+            except Exception:
+                continue
+        
+        return "unknown"
+    
     def get_response(self, length: int = 0) -> tuple[bytes, int, int]:
         """Get remaining response data.
         

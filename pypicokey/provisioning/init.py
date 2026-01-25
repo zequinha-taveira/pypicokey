@@ -5,29 +5,16 @@ This module provides device initialization and provisioning
 functionality for PicoKey devices.
 """
 
-from typing import Optional, Any
-from dataclasses import dataclass
-import logging
-
 from pypicokey.device import PicoKeyDevice
 from pypicokey.constants import DeviceMode
-from pypicokey.exceptions import ProvisioningError
+from pypicokey.exceptions import ProvisioningError, CommunicationError
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ProvisioningConfig:
-    """Configuration for device provisioning.
-    
-    Attributes:
-        device_label: Label to assign to the device.
-        user_pin: User PIN to set.
-        admin_pin: Admin/SO PIN to set.
-        reset_existing: Whether to reset existing configuration.
-        generate_keys: Whether to generate initial keys.
-        key_algorithms: Algorithms for key generation.
-    """
+    """Configuration for device provisioning."""
     
     device_label: str = "PicoKey"
     user_pin: str = "123456"
@@ -41,40 +28,17 @@ class ProvisioningConfig:
             self.key_algorithms = {}
     
     def validate(self) -> list[str]:
-        """Validate the provisioning configuration.
-        
-        Returns:
-            List of validation error messages (empty if valid).
-        """
         errors = []
-        
         if len(self.user_pin) < 4:
             errors.append("User PIN must be at least 4 characters")
-        if len(self.user_pin) > 64:
-            errors.append("User PIN must be at most 64 characters")
-        
         if len(self.admin_pin) < 8:
             errors.append("Admin PIN must be at least 8 characters")
-        if len(self.admin_pin) > 64:
-            errors.append("Admin PIN must be at most 64 characters")
-        
-        if not self.device_label.strip():
-            errors.append("Device label cannot be empty")
-        
         return errors
 
 
 @dataclass
 class ProvisioningResult:
-    """Result of device provisioning.
-    
-    Attributes:
-        success: Whether provisioning succeeded.
-        device_mode: Mode the device was provisioned in.
-        serial_number: Device serial number.
-        generated_keys: List of generated key identifiers.
-        errors: List of error messages if failed.
-    """
+    """Result of device provisioning."""
     
     success: bool
     device_mode: Optional[DeviceMode] = None
@@ -90,33 +54,7 @@ class ProvisioningResult:
 
 
 class DeviceProvisioner:
-    """Device provisioning operations.
-    
-    This class provides functionality for initializing and
-    provisioning new PicoKey devices.
-    
-    Example:
-        >>> from pypicokey import PicoKeyManager
-        >>> from pypicokey.provisioning import DeviceProvisioner, ProvisioningConfig
-        >>> 
-        >>> manager = PicoKeyManager()
-        >>> device = manager.get_device()
-        >>> 
-        >>> config = ProvisioningConfig(
-        ...     device_label="MyPicoKey",
-        ...     user_pin="123456",
-        ...     admin_pin="12345678",
-        ... )
-        >>> 
-        >>> with device:
-        ...     provisioner = DeviceProvisioner(device)
-        ...     result = provisioner.provision(config)
-        ...     print(f"Success: {result.success}")
-    
-    Note:
-        This is a stub implementation. Full provisioning functionality
-        will be implemented in Phase 4.
-    """
+    """Device provisioning operations."""
     
     def __init__(self, device: PicoKeyDevice) -> None:
         """Initialize the provisioner.
@@ -127,39 +65,70 @@ class DeviceProvisioner:
         self._device = device
     
     def provision(self, config: ProvisioningConfig) -> ProvisioningResult:
-        """Provision the device with the given configuration.
-        
-        Args:
-            config: Provisioning configuration.
-            
-        Returns:
-            ProvisioningResult with outcome details.
-            
-        Raises:
-            ProvisioningError: If provisioning fails critically.
-        """
-        # Validate configuration
+        """Provision the device with the given configuration."""
         errors = config.validate()
         if errors:
-            return ProvisioningResult(
-                success=False,
-                errors=errors,
-            )
+            return ProvisioningResult(success=False, errors=errors)
         
-        logger.warning("DeviceProvisioner.provision() is not yet implemented")
+        try:
+            if config.reset_existing:
+                self._perform_reset()
+                
+            if self._device.mode == DeviceMode.FIDO:
+                return self._provision_fido(config)
+            elif self._device.mode == DeviceMode.OPENPGP:
+                return self._provision_openpgp(config)
+            elif self._device.mode == DeviceMode.HSM:
+                return self._provision_hsm(config)
+            else:
+                return ProvisioningResult(success=False, errors=[f"Provisioning not supported for mode: {self._device.mode}"])
+                
+        except Exception as e:
+            logger.error(f"Provisioning failed: {e}")
+            return ProvisioningResult(success=False, errors=[str(e)])
+
+    def _perform_reset(self) -> None:
+        if self._device.mode == DeviceMode.FIDO:
+            from pypicokey.modules.fido import FIDOModule
+            mod = FIDOModule(self._device)
+            mod.reset()
+        elif self._device.mode == DeviceMode.OPENPGP:
+            from pypicokey.modules.openpgp import OpenPGPModule
+            mod = OpenPGPModule(self._device)
+            mod.factory_reset()
+        elif self._device.mode == DeviceMode.HSM:
+            from pypicokey.modules.hsm import HSMModule
+            mod = HSMModule(self._device)
+            mod.factory_reset()
+
+    def _provision_fido(self, config: ProvisioningConfig) -> ProvisioningResult:
+        from pypicokey.modules.fido import FIDOModule
+        mod = FIDOModule(self._device)
+        mod.set_pin(config.user_pin)
+        return ProvisioningResult(success=True, device_mode=DeviceMode.FIDO)
+
+    def _provision_openpgp(self, config: ProvisioningConfig) -> ProvisioningResult:
+        from pypicokey.modules.openpgp import OpenPGPModule
+        mod = OpenPGPModule(self._device)
+        mod.select()
+        # Change default PINs
+        # 123456 (PW1), 12345678 (PW3)
+        mod.change_pin("123456", config.user_pin)
+        mod.change_pin("12345678", config.admin_pin, admin=True)
         
-        # TODO: Implement actual provisioning logic
-        # 1. Check device state
-        # 2. Reset if config.reset_existing
-        # 3. Initialize with PINs
-        # 4. Generate keys if requested
-        
-        return ProvisioningResult(
-            success=False,
-            device_mode=self._device.mode,
-            serial_number=self._device.serial_number,
-            errors=["Provisioning not yet implemented"],
-        )
+        gen_keys = []
+        if config.generate_keys:
+            gen_keys.append("signature")
+            mod.generate_key("signature")
+            
+        return ProvisioningResult(success=True, device_mode=DeviceMode.OPENPGP, generated_keys=gen_keys)
+
+    def _provision_hsm(self, config: ProvisioningConfig) -> ProvisioningResult:
+        from pypicokey.modules.hsm import HSMModule
+        mod = HSMModule(self._device)
+        mod.select()
+        mod.initialize(config.admin_pin, config.user_pin, config.device_label)
+        return ProvisioningResult(success=True, device_mode=DeviceMode.HSM)
     
     def check_state(self) -> dict[str, Any]:
         """Check the current device state for provisioning.
