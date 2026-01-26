@@ -1,5 +1,9 @@
 # 🔐 pypicokey
 
+**[Português]** O **pypicokey** é uma biblioteca Python open-source criada para garantir a liberdade de criar ferramentas em torno dos dispositivos PicoKeys. Leia o nosso **[Manifesto](./MANIFESTO.md)** para entender nossos princípios.
+
+---
+
 <div align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
@@ -216,6 +220,10 @@ pypicokey/
 │   │   ├── openpgp.py       # OpenPGP
 │   │   ├── hsm.py           # HSM
 │   │   └── boot.py          # Bootloader
+│   ├── recipes/             # Living documentation (recipes)
+│   │   ├── fido.md          # FIDO2 recipes
+│   │   ├── openpgp.md       # OpenPGP recipes
+│   │   └── hsm.md           # HSM recipes
 │   ├── provisioning/        # Device provisioning
 │   │   ├── init.py          # Initialization
 │   │   └── securelock.py    # Security features
