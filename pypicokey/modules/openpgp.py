@@ -172,9 +172,29 @@ class OpenPGPModule:
         Raises:
             CommunicationError: If command fails.
         """
-        # TODO: Implement CHANGE REFERENCE DATA command
-        logger.warning("OpenPGPModule.change_pin() is not yet implemented")
-        raise NotImplementedError("OpenPGP change_pin not yet implemented")
+        self._ensure_selected()
+        try:
+            p2 = 0x83 if admin else 0x81
+            old_bytes = old_pin.encode("utf-8")
+            new_bytes = new_pin.encode("utf-8")
+            data = old_bytes + new_bytes
+            
+            # CHANGE REFERENCE DATA (0x24)
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x24, 0x00, p2, data=data)
+            
+            if sw1 == 0x90:
+                logger.info(f"{'Admin' if admin else 'User'} PIN changed successfully")
+                return True
+            elif sw1 == 0x63:
+                retries = sw2 & 0x0F
+                from pypicokey.exceptions import AuthenticationError
+                raise AuthenticationError("Incorrect current PIN", retries_remaining=retries)
+            else:
+                raise CommunicationError(f"PIN change failed: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            if not isinstance(e, (CommunicationError, AuthenticationError)):
+                raise CommunicationError(f"PIN change error: {e}") from e
+            raise
     
     def reset_retry_counter(self, admin_pin: str, new_user_pin: str) -> bool:
         """Reset user PIN retry counter and set new PIN.
@@ -232,6 +252,11 @@ class OpenPGPModule:
         """Perform factory reset of the OpenPGP card.
         
         WARNING: This will delete all keys and reset PINs to defaults.
+        The sequence involves:
+        1. Exhaust User PIN retries
+        2. Exhaust Admin PIN retries
+        3. TERMINATE (0x00, 0xE6, 0x00, 0x00)
+        4. ACTIVATE (0x00, 0x44, 0x00, 0x00)
         
         Returns:
             True if reset was successful.
@@ -239,9 +264,36 @@ class OpenPGPModule:
         Raises:
             CommunicationError: If command fails.
         """
-        # TODO: Implement factory reset sequence
-        logger.warning("OpenPGPModule.factory_reset() is not yet implemented")
-        raise NotImplementedError("OpenPGP factory_reset not yet implemented")
+        self._ensure_selected()
+        logger.warning("Starting OpenPGP factory reset. All keys will be lost.")
+        
+        try:
+            # 1 & 2: Exhaust PINs by sending dummy data
+            dummy_pin = b"wrong"
+            for p2 in [0x81, 0x83]:
+                while True:
+                    _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x20, 0x00, p2, data=dummy_pin)
+                    if sw1 == 0x69 and (sw2 == 0x83 or sw2 == 0x84): # Locked
+                        break
+                    if sw1 != 0x63: # Error other than wrong PIN
+                        break
+            
+            # 3. TERMINATE
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xE6, 0x00, 0x00)
+            if sw1 == 0x6D and sw2 == 0x00: # Instruction not supported
+                 raise CommunicationError("Device does not support TERMINATE/factory reset")
+            
+            # 4. ACTIVATE
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x44, 0x00, 0x00)
+            if sw1 == 0x90:
+                logger.info("OpenPGP factory reset successful")
+                self._selected = False # Need to re-select
+                return True
+            else:
+                raise CommunicationError(f"ACTIVATE failed: {sw1:02X}{sw2:02X}")
+                
+        except Exception as e:
+            raise CommunicationError(f"Factory reset failed: {e}") from e
     
     def __repr__(self) -> str:
         """Return string representation."""

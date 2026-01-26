@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class HSMInfo:
+    """HSM device information."""
+    
+    state: HSMState
+    version: str
+    total_slots: int
+    used_slots: int
+
+
+@dataclass
 class KeyInfo:
     """HSM key information."""
     
@@ -36,8 +46,8 @@ class KeyInfo:
 class HSMModule:
     """HSM operations for Pico HSM devices."""
     
-    # HSM AID
-    AID = bytes.fromhex("E828BD080F014E58534D1001") # Example SmartCard-HSM AID
+    # SmartCard-HSM AID
+    AID = bytes.fromhex("E828BD080F014E58534D1001")
     
     def __init__(self, device: PicoKeyDevice) -> None:
         """Initialize HSM module.
@@ -165,9 +175,6 @@ class HSMModule:
         except Exception as e:
             raise CommunicationError(f"HSM signing failed: {e}") from e
 
-    def __repr__(self) -> str:
-        return f"HSMModule({self._device.name})"
-    
     def factory_reset(self) -> bool:
         """Perform factory reset of the HSM.
         
@@ -179,10 +186,20 @@ class HSMModule:
         Raises:
             CommunicationError: If command fails.
         """
-        # TODO: Implement factory reset
-        logger.warning("HSMModule.factory_reset() is not yet implemented")
-        raise NotImplementedError("HSM factory_reset not yet implemented")
-    
+        self._ensure_selected()
+        logger.warning("Starting HSM factory reset. All keys will be lost.")
+        
+        try:
+            # TERMINATE/RESET command for SmartCard-HSM
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x04, 0x00, 0x00)
+            
+            if sw1 == 0x90:
+                logger.info("HSM factory reset successful")
+                return True
+            else:
+                 raise CommunicationError(f"HSM reset failed: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            raise CommunicationError(f"Factory reset failed: {e}") from e
+
     def __repr__(self) -> str:
-        """Return string representation."""
         return f"HSMModule({self._device.name})"

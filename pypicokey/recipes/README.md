@@ -9,3 +9,4 @@ O objetivo é manter a transparência e permitir que qualquer pessoa entenda com
 - [FIDO2](./fido.md) - Interação via CTAP2
 - [OpenPGP](./openpgp.md) - Comandos APDU para Smartcards
 - [HSM](./hsm.md) - Gestão de chaves e PKCS#11
+- [Pico Boot](./boot.md) - Atualização de firmware UF2
