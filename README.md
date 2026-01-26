@@ -29,6 +29,8 @@
 - **Pico HSM** - Hardware Security Module features
 - **Pico Boot** - Device bootloader/flashing
 
+A biblioteca agora está pronta para ser integrada em GUIs como o SecureKey Manager ou usada scripts de automação de segurança.
+
 ### 🎯 Why pypicokey?
 
 This project was created to **restore community alternatives** and preserve open, auditable technical knowledge for PicoKey device management. Key goals:
