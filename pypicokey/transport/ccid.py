@@ -5,11 +5,10 @@ This module provides CCID (Chip Card Interface Device) transport for
 communicating with smartcard-based devices like OpenPGP and HSM.
 """
 
-from typing import Optional, List
+from typing import Optional
 import logging
 
 from pypicokey.device import BaseTransport
-from pypicokey.constants import CCID_READ_TIMEOUT, CCID_MAX_RESPONSE
 from pypicokey.exceptions import TransportError, CommunicationError
 
 logger = logging.getLogger(__name__)
@@ -38,6 +37,8 @@ class CCIDTransport(BaseTransport):
         self._connection: Optional[object] = None
         self._card: Optional[object] = None
         self._is_open = False
+        self._last_response: Optional[bytes] = None
+        self._last_sw: tuple[int, int] = (0x00, 0x00)
     
     @property
     def is_open(self) -> bool:
@@ -62,10 +63,6 @@ class CCIDTransport(BaseTransport):
         
         try:
             from smartcard.System import readers
-            from smartcard.Exceptions import (
-                CardConnectionException,
-                NoCardException,
-            )
             
             # Find the matching reader
             all_readers = readers()
@@ -89,8 +86,10 @@ class CCIDTransport(BaseTransport):
             self._is_open = True
             logger.debug(f"Opened CCID connection: {self._reader_name}")
             
-        except ImportError:
-            raise TransportError("pyscard library not installed", transport_type="CCID")
+        except ImportError as e:
+            raise TransportError(
+                "pyscard library not installed", transport_type="CCID"
+            ) from e
         except Exception as e:
             self._is_open = False
             raise TransportError(f"Failed to open CCID device: {e}", transport_type="CCID") from e
@@ -155,7 +154,7 @@ class CCIDTransport(BaseTransport):
         if not self.is_open:
             raise TransportError("CCID device not open", transport_type="CCID")
         
-        if not hasattr(self, "_last_response"):
+        if self._last_response is None:
             raise CommunicationError("No response available")
         
         # Return response with status word appended
@@ -193,32 +192,57 @@ class CCIDTransport(BaseTransport):
         """
         if not self.is_open or self._connection is None:
             raise TransportError("CCID device not open", transport_type="CCID")
-        
+
         try:
             # Build APDU
             apdu = [cla, ins, p1, p2]
-            
+
             if data:
                 apdu.append(len(data))
                 apdu.extend(data)
-            
+
             if le is not None:
                 apdu.append(le)
             elif not data:
                 # No data and no Le - add Le=0 for response
                 apdu.append(0x00)
-            
+
             logger.debug(f"Sending APDU: {bytes(apdu).hex()}")
-            
+
+            # Case-3 APDUs (data present, no Le) have no trailing Le byte:
+            # the last byte belongs to the data field.
+            had_le = le is not None or not data
+
             response, sw1, sw2 = self._connection.transmit(apdu)
-            
+
+            # Handle T=0 status word chaining:
+            # 6Cxx: wrong Le, resend with correct Le
+            while sw1 == 0x6C:
+                logger.debug(f"Resending APDU with Le={sw2:02X} (SW 6C{sw2:02X})")
+                if had_le:
+                    apdu[-1] = sw2
+                else:
+                    apdu.append(sw2)
+                    had_le = True
+                response, sw1, sw2 = self._connection.transmit(apdu)
+
+            # 61xx: more data available, fetch with GET RESPONSE.
+            # In T=0 an Le byte of 0x00 means "256 bytes", so the raw sw2
+            # value must be masked to a single byte.
+            while sw1 == 0x61:
+                expected = sw2 & 0xFF
+                logger.debug(f"GET RESPONSE for {(expected or 256)} remaining bytes")
+                get_resp = [0x00, 0xC0, 0x00, 0x00, expected]
+                more, sw1, sw2 = self._connection.transmit(get_resp)
+                response = response + more
+
             logger.debug(f"APDU response: {bytes(response).hex()} SW:{sw1:02X}{sw2:02X}")
-            
+
             return bytes(response), sw1, sw2
-            
+
         except Exception as e:
             raise CommunicationError(f"APDU transmission failed: {e}") from e
-    
+
     def select_application(self, aid: bytes) -> tuple[bytes, int, int]:
         """Select an application by its AID.
         

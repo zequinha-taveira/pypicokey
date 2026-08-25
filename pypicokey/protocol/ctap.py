@@ -7,7 +7,9 @@ This module provides CTAPHID framing and CTAP2 command handling.
 import struct
 import os
 import logging
-from typing import Optional, Tuple, List
+from typing import Optional
+
+from pypicokey.exceptions import CommunicationError
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +38,26 @@ class CTAPHID:
     CONT_HEADER_SIZE = 5
     
     @staticmethod
-    def create_init_packet(cid: int, cmd: int, payload: bytes) -> bytes:
+    def create_init_packet(
+        cid: int,
+        cmd: int,
+        payload: bytes,
+        total_len: Optional[int] = None,
+    ) -> bytes:
         """Create an initial CTAPHID packet.
         
         Args:
             cid: Channel ID.
             cmd: Command byte.
-            payload: Data payload.
+            payload: Data payload (first chunk of the message).
+            total_len: Total message length for the LEN field. Defaults to
+                len(payload) for single-packet messages.
             
         Returns:
             64-byte packet.
         """
-        header = struct.pack(">IBH", cid, cmd | 0x80, len(payload))
+        length = len(payload) if total_len is None else total_len
+        header = struct.pack(">IBH", cid, cmd | 0x80, length)
         packet = header + payload
         return packet.ljust(CTAPHID.PACKET_SIZE, b"\x00")[:CTAPHID.PACKET_SIZE]
 
@@ -79,21 +89,25 @@ class CTAPHandler:
         """Initialize CTAPHID and get a channel ID."""
         nonce = os.urandom(8)
         packet = CTAPHID.create_init_packet(self._cid, CTAPHID.INIT, nonce)
-        
+
         self._transport.send(packet)
         response = self._transport.receive()
-        
-        if not response or len(response) < 15:
+
+        if not response or len(response) < 19:
             return False
-            
+
         # Verify nonce
         resp_cid, resp_cmd, resp_len = struct.unpack(">IBH", response[:7])
         resp_nonce = response[7:15]
-        
+
+        if resp_cmd != (CTAPHID.INIT | 0x80):
+            logger.error(f"CTAPHID INIT: unexpected command 0x{resp_cmd:02X}")
+            return False
+
         if resp_nonce != nonce:
             logger.error("CTAPHID INIT: Nonce mismatch")
             return False
-            
+
         # New CID is in the payload after the nonce
         self._cid = struct.unpack(">I", response[15:19])[0]
         logger.debug(f"CTAPHID initialized. New CID: {self._cid:08X}")
@@ -116,11 +130,12 @@ class CTAPHandler:
         """Send a full CTAPHID message and collect the response."""
         # Sending
         remaining = payload
-        idx = 0
         
         # Init packet
         chunk = remaining[:CTAPHID.PACKET_SIZE - CTAPHID.INIT_HEADER_SIZE]
-        self._transport.send(CTAPHID.create_init_packet(self._cid, cmd, payload))
+        self._transport.send(CTAPHID.create_init_packet(
+            self._cid, cmd, chunk, total_len=len(payload)
+        ))
         remaining = remaining[len(chunk):]
         
         # Cont packets
@@ -130,22 +145,47 @@ class CTAPHandler:
             self._transport.send(CTAPHID.create_cont_packet(self._cid, seq, chunk))
             remaining = remaining[len(chunk):]
             seq += 1
-            
+
         # Receiving
-        response = self._transport.receive()
-        if not response:
-            raise Exception("No response from device")
-            
-        resp_cid, resp_cmd, total_len = struct.unpack(">IBH", response[:7])
-        
-        if resp_cid != self._cid:
-            raise Exception(f"CID mismatch: expected {self._cid:08X}, got {resp_cid:08X}")
-            
-        message = response[7:]
-        while len(message) < total_len:
-            cont = self._transport.receive()
-            if not cont:
+        message = b""
+        expected_seq = 0
+        total_len: int | None = None
+
+        while total_len is None or len(message) < total_len:
+            response = self._transport.receive()
+            if not response:
+                if total_len is None:
+                    raise CommunicationError("No response from device")
                 break
-            message += cont[5:]
-            
-        return message[:total_len]
+
+            resp_cid, resp_cmd, resp_len = struct.unpack(">IBH", response[:7])
+
+            if resp_cmd == CTAPHID.KEEPALIVE:
+                continue
+            if resp_cmd == CTAPHID.ERROR:
+                raise CommunicationError(
+                    f"Device reported CTAPHID ERROR (status 0x{response[5]:02X})"
+                )
+            if resp_cid != self._cid:
+                raise CommunicationError(
+                    f"CID mismatch: expected {self._cid:08X}, got {resp_cid:08X}"
+                )
+
+            if total_len is None:
+                if resp_cmd != (cmd | 0x80):
+                    raise CommunicationError(
+                        f"Unexpected CTAPHID command: expected "
+                        f"0x{cmd | 0x80:02X}, got 0x{resp_cmd:02X}"
+                    )
+                total_len = resp_len
+                message += response[7:]
+            else:
+                if resp_cmd != expected_seq:
+                    raise CommunicationError(
+                        f"Out-of-order continuation packet: expected seq "
+                        f"{expected_seq}, got {resp_cmd}"
+                    )
+                expected_seq += 1
+                message += response[5:]
+
+        return message[:total_len] if total_len is not None else b""

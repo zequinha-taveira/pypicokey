@@ -197,3 +197,33 @@ class TestExceptionHierarchy:
         for error_type in ["device", "connection", "communication"]:
             with pytest.raises(PicoKeyError):
                 raise_various_errors(error_type)
+
+
+class TestPublicExports:
+    """Callers must be able to import the full exception taxonomy from pypicokey."""
+
+    def test_all_contains_exception_names(self) -> None:
+        import pypicokey
+
+        expected = {
+            "PicoKeyError",
+            "DeviceNotFoundError",
+            "DeviceConnectionError",
+            "ConnectionError",
+            "CommunicationError",
+            "UnsupportedModeError",
+            "TransportError",
+            "AuthenticationError",
+            "ProvisioningError",
+        }
+        assert expected.issubset(set(pypicokey.__all__))
+
+    def test_exported_exceptions_are_catchable_from_package_root(self) -> None:
+        import pypicokey
+        from pypicokey.exceptions import DeviceConnectionError
+
+        assert pypicokey.TransportError is TransportError
+        assert pypicokey.AuthenticationError is AuthenticationError
+        assert pypicokey.ProvisioningError is ProvisioningError
+        # Backwards-compatible alias and canonical name both exported
+        assert pypicokey.ConnectionError is DeviceConnectionError

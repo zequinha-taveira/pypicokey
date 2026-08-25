@@ -69,7 +69,7 @@ class DeviceNotFoundError(PicoKeyError):
         super().__init__(message, details)
 
 
-class ConnectionError(PicoKeyError):
+class DeviceConnectionError(PicoKeyError):
     """Raised when connection to a device fails.
     
     This exception is raised when:
@@ -93,6 +93,10 @@ class ConnectionError(PicoKeyError):
         self.device_path = device_path
         details = f"Path: {device_path}" if device_path else None
         super().__init__(message, details)
+
+
+# Backwards-compatible alias (ConnectionError shadows the builtin)
+ConnectionError = DeviceConnectionError
 
 
 class CommunicationError(PicoKeyError):

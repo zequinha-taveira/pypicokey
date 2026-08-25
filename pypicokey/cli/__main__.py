@@ -11,8 +11,8 @@ from pypicokey.provisioning import DeviceProvisioner, ProvisioningConfig
 app = typer.Typer(help="pypicokey CLI - Management tool for PicoKey devices")
 console = Console()
 
-@app.command()
-def list():
+@app.command(name="list")
+def list_devices():
     """List all connected PicoKey devices."""
     manager = PicoKeyManager()
     devices = manager.discover()
@@ -46,7 +46,14 @@ def info(
 ):
     """Show detailed information about a device."""
     manager = PicoKeyManager()
-    mode_filter = DeviceMode(mode.lower()) if mode else None
+    mode_filter = None
+    if mode:
+        try:
+            mode_filter = DeviceMode(mode.lower())
+        except ValueError:
+            valid = ", ".join(m.value for m in DeviceMode)
+            rprint(f"[red]Error: Invalid mode '{mode}'. Valid modes: {valid}[/red]")
+            return
     devices = manager.discover(mode_filter=mode_filter)
     
     if index > len(devices) or index < 1:
@@ -151,10 +158,14 @@ def hsm_list_keys(index: int = typer.Option(1, help="Index of the HSM device")):
     if not devices:
         rprint("[yellow]No HSM devices found.[/yellow]")
         return
-        
+
+    if index > len(devices) or index < 1:
+        rprint(f"[red]Error: Device index {index} out of range.[/red]")
+        return
+
     device = devices[index - 1]
     from pypicokey.modules.hsm import HSMModule
-    
+
     with device:
         hsm = HSMModule(device)
         keys = hsm.list_keys()
@@ -187,10 +198,14 @@ def hsm_gen_key(
     if not devices:
         rprint("[yellow]No HSM devices found.[/yellow]")
         return
-        
+
+    if index > len(devices) or index < 1:
+        rprint(f"[red]Error: Device index {index} out of range.[/red]")
+        return
+
     device = devices[index - 1]
     from pypicokey.modules.hsm import HSMModule
-    
+
     with device:
         hsm = HSMModule(device)
         rprint(f"Generating {type.upper()} key '[bold]{label}[/bold]'...")

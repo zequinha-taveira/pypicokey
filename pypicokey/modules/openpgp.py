@@ -5,16 +5,23 @@ This module provides OpenPGP smartcard functionality for interacting
 with Pico OpenPGP devices.
 """
 
-from typing import Optional, Any
+from typing import Any, Optional
 from dataclasses import dataclass
 import logging
 
 from pypicokey.device import PicoKeyDevice
-from pypicokey.constants import DeviceMode, OpenPGPInstruction
+from pypicokey.constants import DeviceMode
 from pypicokey.exceptions import UnsupportedModeError, CommunicationError
-from pypicokey.protocol.openpgp_apdu import OpenPGPAPDU, TLVParser
+from pypicokey.protocol.openpgp_apdu import TLVParser
 
 logger = logging.getLogger(__name__)
+
+# Shared key reference bytes for OpenPGP key slots (used by GET/GENERATE key)
+SLOT_KEY_REFS = {
+    "signature": 0xB6,
+    "encryption": 0xB8,
+    "authentication": 0xA4,
+}
 
 
 @dataclass
@@ -27,7 +34,7 @@ class OpenPGPInfo:
     serial_number: Optional[str] = None
     pin_retries: tuple[int, int, int] = (3, 0, 3)
     signature_count: int = 0
-    key_slots: dict[str, dict[str, Any]] = None
+    key_slots: Optional[dict[str, dict[str, Any]]] = None
     
     def __post_init__(self) -> None:
         if self.key_slots is None:
@@ -86,16 +93,18 @@ class OpenPGPModule:
             from pypicokey.transport.ccid import CCIDTransport
             if not isinstance(self._device._transport, CCIDTransport):
                 raise CommunicationError("Device transport is not CCID")
-                
+
             response, sw1, sw2 = self._device._transport.select_application(self.AID)
             if sw1 == 0x90 and sw2 == 0x00:
                 self._selected = True
                 return True
             else:
                 raise CommunicationError(f"Failed to select OpenPGP application: {sw1:02X}{sw2:02X}")
+        except CommunicationError:
+            raise
         except Exception as e:
             raise CommunicationError(f"OpenPGP selection failed: {e}") from e
-    
+
     def get_info(self) -> OpenPGPInfo:
         """Get OpenPGP card information via GET DATA commands."""
         self._ensure_selected()
@@ -229,19 +238,15 @@ class OpenPGPModule:
         """
         self._ensure_selected()
         
-        slot_map = {
-            "signature": 0x00,
-            "encryption": 0x01,
-            "authentication": 0x02,
-        }
-        
-        if slot not in slot_map:
-            raise ValueError(f"Invalid slot: {slot}. Must be one of {list(slot_map.keys())}")
+        if slot not in SLOT_KEY_REFS:
+            raise ValueError(
+                f"Invalid slot: {slot}. Must be one of {list(SLOT_KEY_REFS.keys())}"
+            )
         
         try:
             # GET PUBLIC KEY (00 47 80 00) with tag DO for the slot
             # First, set the correct key reference
-            key_ref = bytes([0xB6 + slot_map[slot]])
+            key_ref = bytes([SLOT_KEY_REFS[slot]])
             _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xA4, 0x01, 0x00, data=key_ref)
             
             if sw1 != 0x90:
@@ -280,12 +285,6 @@ class OpenPGPModule:
         """
         self._ensure_selected()
         
-        slot_map = {
-            "signature": 0xB6,
-            "encryption": 0xB8,
-            "authentication": 0xA4,
-        }
-        
         algo_map = {
             "rsa2048": bytes([0x01]),
             "rsa4096": bytes([0x02]),
@@ -298,7 +297,7 @@ class OpenPGPModule:
             "brainpoolp512r1": bytes([0x18]),
         }
         
-        if slot not in slot_map:
+        if slot not in SLOT_KEY_REFS:
             raise ValueError(f"Invalid slot: {slot}")
         if algorithm not in algo_map:
             raise ValueError(f"Unsupported algorithm: {algorithm}. Supported: {list(algo_map.keys())}")
@@ -306,18 +305,18 @@ class OpenPGPModule:
         try:
             # Set algorithm attributes first
             algo_data = algo_map[algorithm]
-            attr_tag = bytes([0xC1 if slot == "signature" else 0xC2 if slot == "encryption" else 0xC3])
+            attr_p2 = 0xC1 if slot == "signature" else 0xC2 if slot == "encryption" else 0xC3
             
             # PUT DATA for algorithm attributes
-            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xDA, 0x00, 
-                                                           0xC1 if slot == "signature" else 0xC2 if slot == "encryption" else 0xC3,
-                                                           data=algo_data)
+            _, sw1, sw2 = self._device._transport.send_apdu(
+                0x00, 0xDA, 0x00, attr_p2, data=algo_data
+            )
             if sw1 != 0x90:
                 raise CommunicationError(f"Failed to set algorithm: {sw1:02X}{sw2:02X}")
             
             # GENERATE ASYMMETRIC KEY PAIR (00 47 80 00)
             # Data contains template with key reference
-            key_ref = bytes([slot_map[slot], 0x00])
+            key_ref = bytes([SLOT_KEY_REFS[slot], 0x00])
             resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x47, 0x80, 0x00, data=key_ref, le=0)
             
             if sw1 == 0x90 and resp:
@@ -378,7 +377,3 @@ class OpenPGPModule:
                 
         except Exception as e:
             raise CommunicationError(f"Factory reset failed: {e}") from e
-    
-    def __repr__(self) -> str:
-        """Return string representation."""
-        return f"OpenPGPModule({self._device.name})"

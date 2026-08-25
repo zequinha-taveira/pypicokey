@@ -17,7 +17,7 @@ from pypicokey.constants import (
     KNOWN_DEVICES,
 )
 from pypicokey.exceptions import (
-    ConnectionError,
+    DeviceConnectionError,
     CommunicationError,
     UnsupportedModeError,
 )
@@ -178,7 +178,7 @@ class PicoKeyDevice:
         Opens the transport layer connection to the device.
         
         Raises:
-            ConnectionError: If connection fails.
+            DeviceConnectionError: If connection fails.
         """
         if self._connected:
             return
@@ -189,7 +189,7 @@ class PicoKeyDevice:
             self._connected = True
         except Exception as e:
             self._connected = False
-            raise ConnectionError(
+            raise DeviceConnectionError(
                 f"Failed to connect to {self.name}",
                 device_path=self._info.path,
             ) from e
@@ -233,11 +233,11 @@ class PicoKeyDevice:
             Response bytes from the device.
             
         Raises:
-            ConnectionError: If not connected.
+            DeviceConnectionError: If not connected.
             CommunicationError: If communication fails.
         """
         if not self.is_connected or self._transport is None:
-            raise ConnectionError("Not connected to device")
+            raise DeviceConnectionError("Not connected to device")
         
         try:
             self._transport.send(data)
@@ -260,11 +260,17 @@ class PicoKeyDevice:
         # Import here to avoid circular imports
         from pypicokey.transport.hid import HIDTransport
         from pypicokey.transport.ccid import CCIDTransport
-        
+        from pypicokey.transport.usb import USBTransport
+        from pypicokey.transport.msd import MSDTransport
+
         if self._info.transport_type == TransportType.HID:
             return HIDTransport(self._info.path or "", self._info.vendor_id, self._info.product_id)
         elif self._info.transport_type == TransportType.CCID:
             return CCIDTransport(self._info.path or "")
+        elif self._info.transport_type == TransportType.USB:
+            return USBTransport(self._info.vendor_id, self._info.product_id)
+        elif self._info.transport_type == TransportType.MSD:
+            return MSDTransport(self._info.path or None)
         else:
             raise UnsupportedModeError(
                 "Unsupported transport type",

@@ -15,7 +15,6 @@ from pypicokey.constants import (
     VendorID,
     ProductID,
     KNOWN_DEVICES,
-    InterfaceClass,
 )
 from pypicokey.exceptions import DeviceNotFoundError
 from pypicokey.utils.atr import ATRParser
@@ -256,7 +255,6 @@ class PicoKeyManager:
         
         try:
             from smartcard.System import readers
-            from smartcard.Exceptions import CardConnectionException
             
             for reader in readers():
                 reader_name = str(reader)
@@ -268,12 +266,18 @@ class PicoKeyManager:
                 try:
                     connection = reader.createConnection()
                     connection.connect()
-                    atr = bytes(connection.getATR())
-                    connection.disconnect()
-                    
-                    atr_info = self._atr_parser.parse(atr)
-                    if atr_info.card_type != "unknown" or "pico" in atr_info.historical_bytes.decode('ascii', errors='ignore').lower():
-                        is_pico = True
+                    try:
+                        atr = bytes(connection.getATR())
+                        atr_info = self._atr_parser.parse(atr)
+                        if (
+                            atr_info.card_type != "unknown"
+                            or "pico" in atr_info.historical_bytes.decode(
+                                'ascii', errors='ignore'
+                            ).lower()
+                        ):
+                            is_pico = True
+                    finally:
+                        connection.disconnect()
                 except Exception as e:
                     logger.debug(f"Could not read ATR from {reader_name}: {e}")
                     atr = b""
@@ -347,9 +351,15 @@ class PicoKeyManager:
                         if (vid, pid) in KNOWN_DEVICES:
                             name, mode = KNOWN_DEVICES[(vid, pid)]
                         else:
-                            # Unknown product ID, might be in boot mode
-                            name = "Pico Device"
-                            mode = DeviceMode.UNKNOWN
+                            # Unknown product ID: RP2040 BOOTSEL exposes an
+                            # implementation-specific PID, so Raspberry Pi
+                            # vendor devices are assumed to be in boot mode.
+                            if vid == VendorID.RASPBERRY_PI:
+                                name = "Pico Bootloader"
+                                mode = DeviceMode.BOOT
+                            else:
+                                name = "Pico Device"
+                                mode = DeviceMode.UNKNOWN
                         
                         # Try to get serial number
                         try:
@@ -389,11 +399,18 @@ class PicoKeyManager:
         Returns:
             List of unique devices.
         """
-        seen: set[tuple[int, int, Optional[str]]] = set()
+        seen: set[tuple[int, int, str | None, str | None]] = set()
         unique: list[PicoKeyDevice] = []
-        
+
         for device in devices:
-            key = (device.vendor_id, device.product_id, device.serial_number)
+            # Serial alone is not enough: multiple CCID readers can report
+            # serial=None for distinct physical devices.
+            key = (
+                device.vendor_id,
+                device.product_id,
+                device.serial_number,
+                device.info.path,
+            )
             if key not in seen:
                 seen.add(key)
                 unique.append(device)

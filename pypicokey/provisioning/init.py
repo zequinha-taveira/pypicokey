@@ -6,7 +6,7 @@ functionality for PicoKey devices.
 """
 
 from typing import Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 from pypicokey.device import PicoKeyDevice
@@ -19,18 +19,20 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProvisioningConfig:
     """Configuration for device provisioning."""
-    
+
     device_label: str = "PicoKey"
-    user_pin: str = "123456"
-    admin_pin: str = "12345678"
+    user_pin: str = field(default="123456", repr=False)
+    admin_pin: str = field(default="12345678", repr=False)
+    current_user_pin: str | None = field(default=None, repr=False)
+    current_admin_pin: str | None = field(default=None, repr=False)
     reset_existing: bool = False
     generate_keys: bool = False
-    key_algorithms: dict[str, str] = None
-    
+    key_algorithms: Optional[dict[str, str]] = None
+
     def __post_init__(self) -> None:
         if self.key_algorithms is None:
             self.key_algorithms = {}
-    
+
     def validate(self) -> list[str]:
         errors = []
         if len(self.user_pin) < 4:
@@ -47,8 +49,8 @@ class ProvisioningResult:
     success: bool
     device_mode: Optional[DeviceMode] = None
     serial_number: Optional[str] = None
-    generated_keys: list[str] = None
-    errors: list[str] = None
+    generated_keys: Optional[list[str]] = None
+    errors: Optional[list[str]] = None
     
     def __post_init__(self) -> None:
         if self.generated_keys is None:
@@ -92,18 +94,46 @@ class DeviceProvisioner:
             return ProvisioningResult(success=False, errors=[str(e)])
 
     def _perform_reset(self) -> None:
-        if self._device.mode == DeviceMode.FIDO:
-            from pypicokey.modules.fido import FIDOModule
-            mod = FIDOModule(self._device)
-            mod.reset()
-        elif self._device.mode == DeviceMode.OPENPGP:
-            from pypicokey.modules.openpgp import OpenPGPModule
-            mod = OpenPGPModule(self._device)
-            mod.factory_reset()
-        elif self._device.mode == DeviceMode.HSM:
-            from pypicokey.modules.hsm import HSMModule
-            mod = HSMModule(self._device)
-            mod.factory_reset()
+        """Reset the device before provisioning.
+        
+        Destructive steps are guarded: if the device does not support the
+        reset operation, an error is raised before any destructive action
+        can leave the device in a wiped state mid-provisioning.
+        
+        Raises:
+            ProvisioningError: If reset is not supported or fails.
+        """
+        try:
+            if self._device.mode == DeviceMode.FIDO:
+                from pypicokey.modules.fido import FIDOModule
+                mod = FIDOModule(self._device)
+                info = mod.get_info()
+                if not info.options.get("resetAllowed", True):
+                    raise CommunicationError(
+                        "FIDO device does not allow reset in current state"
+                    )
+                mod.reset()
+            elif self._device.mode == DeviceMode.OPENPGP:
+                from pypicokey.modules.openpgp import OpenPGPModule
+                mod = OpenPGPModule(self._device)
+                mod.select()
+                mod.factory_reset()
+            elif self._device.mode == DeviceMode.HSM:
+                from pypicokey.modules.hsm import HSMModule
+                mod = HSMModule(self._device)
+                mod.select()
+                # Verify we can talk to the applet before wiping it
+                mod.get_info()
+                mod.factory_reset()
+            else:
+                raise CommunicationError(
+                    f"Reset not supported for mode: {self._device.mode}"
+                )
+        except Exception as e:
+            raise ProvisioningError(
+                f"Device reset failed, aborting provisioning: {e}",
+                stage="reset",
+            ) from e
 
     def _provision_fido(self, config: ProvisioningConfig) -> ProvisioningResult:
         from pypicokey.modules.fido import FIDOModule
@@ -115,16 +145,27 @@ class DeviceProvisioner:
         from pypicokey.modules.openpgp import OpenPGPModule
         mod = OpenPGPModule(self._device)
         mod.select()
-        # Change default PINs
-        # 123456 (PW1), 12345678 (PW3)
-        mod.change_pin("123456", config.user_pin)
-        mod.change_pin("12345678", config.admin_pin, admin=True)
-        
+
+        # After a reset the card is back to factory PINs; otherwise the
+        # current PINs must be supplied to be able to change them.
+        if config.reset_existing:
+            old_user, old_admin = "123456", "12345678"
+        elif config.current_user_pin and config.current_admin_pin:
+            old_user, old_admin = config.current_user_pin, config.current_admin_pin
+        else:
+            raise ProvisioningError(
+                "OpenPGP provisioning requires either reset_existing=True or "
+                "the current user/admin PINs (current_user_pin/current_admin_pin)"
+            )
+
+        mod.change_pin(old_user, config.user_pin)
+        mod.change_pin(old_admin, config.admin_pin, admin=True)
+
         gen_keys = []
         if config.generate_keys:
             gen_keys.append("signature")
             mod.generate_key("signature")
-            
+
         return ProvisioningResult(success=True, device_mode=DeviceMode.OPENPGP, generated_keys=gen_keys)
 
     def _provision_hsm(self, config: ProvisioningConfig) -> ProvisioningResult:

@@ -12,7 +12,11 @@ import logging
 
 from pypicokey.device import PicoKeyDevice
 from pypicokey.constants import DeviceMode
-from pypicokey.exceptions import UnsupportedModeError, CommunicationError
+from pypicokey.exceptions import (
+    UnsupportedModeError,
+    CommunicationError,
+    ProvisioningError,
+)
 from pypicokey.transport.msd import MSDTransport
 
 logger = logging.getLogger(__name__)
@@ -93,10 +97,14 @@ class BootModule:
         msd = self._ensure_msd()
         
         if not firmware_path.exists():
-            raise ValueError(f"Firmware file not found: {firmware_path}")
-        
+            raise ProvisioningError(
+                f"Firmware file not found: {firmware_path}", stage="flash"
+            )
+
         if firmware_path.suffix.lower() != ".uf2":
-            raise ValueError(f"Invalid format, expected .uf2: {firmware_path}")
+            raise ProvisioningError(
+                f"Invalid format, expected .uf2: {firmware_path}", stage="flash"
+            )
             
         try:
             if progress_callback:

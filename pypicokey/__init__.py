@@ -22,9 +22,13 @@ from pypicokey.constants import DeviceMode, VendorID, ProductID
 from pypicokey.exceptions import (
     PicoKeyError,
     DeviceNotFoundError,
+    DeviceConnectionError,
     ConnectionError,
     CommunicationError,
     UnsupportedModeError,
+    TransportError,
+    AuthenticationError,
+    ProvisioningError,
 )
 
 __all__ = [
@@ -42,7 +46,11 @@ __all__ = [
     # Exceptions
     "PicoKeyError",
     "DeviceNotFoundError",
+    "DeviceConnectionError",
     "ConnectionError",
     "CommunicationError",
     "UnsupportedModeError",
+    "TransportError",
+    "AuthenticationError",
+    "ProvisioningError",
 ]

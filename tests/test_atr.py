@@ -29,3 +29,31 @@ def test_detect_hsm():
     hist = b"PicoHSM"
     card_type = parser._detect_card_type(hist)
     assert card_type == "hsm"
+
+
+class TestTruncatedAtr:
+    def test_truncated_historical_bytes_returns_partial_slice(self):
+        parser = ATRParser()
+        # T0 = 0x5F: K=15 historical bytes, TA/TC present, no TD; the ATR
+        # is cut short so only one of the announced historical bytes fits.
+        atr = b"\x3B\x5F" + b"\xA1\xB2\xC3"
+        info = parser.parse(atr)
+        assert info.historical_bytes == b"\xC3"
+        assert info.tck is None
+
+    def test_t1_atr_tck_read_from_correct_byte(self):
+        parser = ATRParser()
+        # T0 = 0x81: 1 historical byte, TD1 present announcing T=1 only
+        # Layout: TS T0 TD1 HIST TCK
+        atr = b"\x3B\x81\x01\xAA\x7E"
+        info = parser.parse(atr)
+        assert 1 in info.protocols
+        assert info.historical_bytes == b"\xAA"
+        assert info.tck == 0x7E
+
+    def test_full_historical_bytes_unchanged(self):
+        parser = ATRParser()
+        # T0 = 0x24: TB present, 4 historical bytes, all within bounds
+        atr = b"\x3B\x24\x00" + b"PicoKey"
+        info = parser.parse(atr)
+        assert info.historical_bytes == b"Pico"
