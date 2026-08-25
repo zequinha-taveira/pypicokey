@@ -2,7 +2,8 @@
 HSM module for pypicokey.
 
 This module provides Hardware Security Module functionality for
-interacting with Pico HSM devices.
+interacting with Pico HSM devices, including support for
+post-quantum cryptography algorithms (future).
 """
 
 from typing import Optional, Any
@@ -41,6 +42,91 @@ class KeyInfo:
     def __post_init__(self) -> None:
         if self.usage is None:
             self.usage = []
+
+
+@dataclass
+class PQAlgorithm:
+    """Post-Quantum algorithm specification."""
+    
+    name: str
+    family: str  # "KEM" or "Signature"
+    security_level: int  # NIST level (1, 3, 5)
+    public_key_size: int
+    private_key_size: int
+    ciphertext_or_signature_size: int
+    standardized: bool  # True if NIST standardized
+
+
+# Post-Quantum Algorithms Roadmap
+# Based on NIST FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA)
+PQ_ALGORITHMS = {
+    # ML-KEM (Kyber) - Key Encapsulation
+    "ml-kem-512": PQAlgorithm(
+        name="ML-KEM-512",
+        family="KEM",
+        security_level=1,
+        public_key_size=800,
+        private_key_size=1632,
+        ciphertext_size=768,
+        standardized=True
+    ),
+    "ml-kem-768": PQAlgorithm(
+        name="ML-KEM-768",
+        family="KEM",
+        security_level=3,
+        public_key_size=1184,
+        private_key_size=2400,
+        ciphertext_size=1088,
+        standardized=True
+    ),
+    "ml-kem-1024": PQAlgorithm(
+        name="ML-KEM-1024",
+        family="KEM",
+        security_level=5,
+        public_key_size=1568,
+        private_key_size=3168,
+        ciphertext_size=1568,
+        standardized=True
+    ),
+    # ML-DSA (Dilithium) - Digital Signature
+    "ml-dsa-44": PQAlgorithm(
+        name="ML-DSA-44",
+        family="Signature",
+        security_level=2,
+        public_key_size=1312,
+        private_key_size=2400,
+        signature_size=4628,
+        standardized=True
+    ),
+    "ml-dsa-65": PQAlgorithm(
+        name="ML-DSA-65",
+        family="Signature",
+        security_level=3,
+        public_key_size=1952,
+        private_key_size=4000,
+        signature_size=3309,
+        standardized=True
+    ),
+    "ml-dsa-87": PQAlgorithm(
+        name="ML-DSA-87",
+        family="Signature",
+        security_level=5,
+        public_key_size=2592,
+        private_key_size=4864,
+        signature_size=4595,
+        standardized=True
+    ),
+    # SLH-DSA (Sphincs+) - Digital Signature (stateless)
+    "slh-dsa-shake-128s": PQAlgorithm(
+        name="SLH-DSA-SHAKE-128s",
+        family="Signature",
+        security_level=1,
+        public_key_size=32,
+        private_key_size=64,
+        signature_size=7856,
+        standardized=True
+    ),
+}
 
 
 class HSMModule:
@@ -200,6 +286,137 @@ class HSMModule:
                  raise CommunicationError(f"HSM reset failed: {sw1:02X}{sw2:02X}")
         except Exception as e:
             raise CommunicationError(f"Factory reset failed: {e}") from e
+    
+    def get_pq_algorithms(self) -> dict[str, PQAlgorithm]:
+        """Get list of supported post-quantum algorithms.
+        
+        Returns:
+            Dictionary of algorithm name to PQAlgorithm spec.
+        """
+        return PQ_ALGORITHMS.copy()
+    
+    def generate_pq_key(
+        self,
+        slot: int,
+        algorithm: str,
+        label: Optional[str] = None,
+    ) -> KeyInfo:
+        """Generate a post-quantum key pair.
+        
+        Args:
+            slot: Key slot number.
+            algorithm: PQ algorithm name (e.g., "ml-kem-768", "ml-dsa-65").
+            label: Optional label for the key.
+            
+        Returns:
+            KeyInfo with key details.
+            
+        Raises:
+            ValueError: If algorithm is not supported.
+            NotImplementedError: If PQ key generation is not yet implemented.
+        """
+        if algorithm not in PQ_ALGORITHMS:
+            raise ValueError(
+                f"Unsupported PQ algorithm: {algorithm}. "
+                f"Supported: {list(PQ_ALGORITHMS.keys())}"
+            )
+        
+        algo_spec = PQ_ALGORITHMS[algorithm]
+        
+        # Check if firmware supports PQ (future feature)
+        # For now, this is a placeholder for when hsm.py in SDK is mature
+        logger.warning(
+            f"PQ key generation for {algorithm} is planned but not yet implemented. "
+            "Waiting for pico-keys-sdk hsm.py module to mature."
+        )
+        
+        raise NotImplementedError(
+            f"Post-quantum key generation ({algorithm}) is not yet implemented. "
+            "This feature will be available when the pico-keys-sdk HSM module matures. "
+            "See INTEGRACAO_PYPIKOKEY_SDK.md for roadmap details."
+        )
+    
+    def encapsulate(self, slot: int, public_key: bytes) -> tuple[bytes, bytes]:
+        """Encapsulate a shared secret using a KEM (Key Encapsulation Mechanism).
+        
+        Args:
+            slot: Public key slot.
+            public_key: Recipient's public key.
+            
+        Returns:
+            Tuple of (ciphertext, shared_secret).
+            
+        Raises:
+            NotImplementedError: If KEM operations are not yet implemented.
+        """
+        raise NotImplementedError(
+            "Post-quantum KEM encapsulation is not yet implemented. "
+            "This feature requires the pico-keys-sdk HSM module to support ML-KEM."
+        )
+    
+    def decapsulate(self, slot: int, ciphertext: bytes) -> bytes:
+        """Decapsulate a shared secret using a KEM.
+        
+        Args:
+            slot: Private key slot.
+            ciphertext: Ciphertext from encapsulation.
+            
+        Returns:
+            Shared secret.
+            
+        Raises:
+            NotImplementedError: If KEM operations are not yet implemented.
+        """
+        raise NotImplementedError(
+            "Post-quantum KEM decapsulation is not yet implemented. "
+            "This feature requires the pico-keys-sdk HSM module to support ML-KEM."
+        )
+    
+    def sign_pq(self, slot: int, data: bytes, algorithm: str) -> bytes:
+        """Sign data using a post-quantum signature algorithm.
+        
+        Args:
+            slot: Private key slot.
+            data: Data to sign.
+            algorithm: PQ signature algorithm (e.g., "ml-dsa-65").
+            
+        Returns:
+            Signature bytes.
+            
+        Raises:
+            NotImplementedError: If PQ signatures are not yet implemented.
+        """
+        if algorithm not in PQ_ALGORITHMS:
+            raise ValueError(f"Unsupported PQ algorithm: {algorithm}")
+        
+        algo_spec = PQ_ALGORITHMS[algorithm]
+        if algo_spec.family != "Signature":
+            raise ValueError(f"{algorithm} is not a signature algorithm")
+        
+        raise NotImplementedError(
+            f"Post-quantum signatures ({algorithm}) are not yet implemented. "
+            "This feature requires the pico-keys-sdk HSM module to support ML-DSA or SLH-DSA."
+        )
+    
+    def verify_pq(self, public_key: bytes, data: bytes, signature: bytes, algorithm: str) -> bool:
+        """Verify a post-quantum signature.
+        
+        Args:
+            public_key: Signer's public key.
+            data: Original data.
+            signature: Signature to verify.
+            algorithm: PQ signature algorithm used.
+            
+        Returns:
+            True if signature is valid.
+            
+        Raises:
+            NotImplementedError: If PQ verification is not yet implemented.
+        """
+        raise NotImplementedError(
+            "Post-quantum signature verification is not yet implemented. "
+            "This feature requires the pico-keys-sdk HSM module to support ML-DSA or SLH-DSA."
+        )
 
     def __repr__(self) -> str:
         return f"HSMModule({self._device.name})"
