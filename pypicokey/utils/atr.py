@@ -29,7 +29,7 @@ class ATRInfo:
     t0: int = 0
     historical_bytes: bytes = b""
     tck: Optional[int] = None
-    protocols: list[int] = None
+    protocols: Optional[list[int]] = None
     card_type: str = "unknown"
     
     def __post_init__(self) -> None:
@@ -162,10 +162,10 @@ class ATRParser:
         if not protocols:
             protocols = [0]
         
-        # Historical bytes
+        # Historical bytes (partial slice if the ATR is truncated)
         hist_start = idx
         hist_end = hist_start + k
-        historical_bytes = atr[hist_start:hist_end] if hist_end <= len(atr) else b""
+        historical_bytes = atr[hist_start:min(hist_end, len(atr))]
         
         # TCK (check byte) present if T != 0 only
         tck = None

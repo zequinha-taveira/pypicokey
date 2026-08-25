@@ -5,13 +5,12 @@ This module provides OTP (One-Time Password) functionality for
 interacting with Pico OTP devices, compatible with YubiKey OTP protocol.
 """
 
-from typing import Optional, Any
+from typing import Optional
 from dataclasses import dataclass
 import logging
 import hmac
 import hashlib
 import struct
-import time
 
 from pypicokey.device import PicoKeyDevice
 from pypicokey.constants import DeviceMode
@@ -90,29 +89,37 @@ class OTPModule:
             self.select()
     
     def select(self) -> bool:
-        """Select the OTP application."""
-        try:
-            from pypicokey.transport.ccid import CCIDTransport
-            if not isinstance(self._device._transport, CCIDTransport):
-                # For HID transport, we don't need to select
-                self._selected = True
-                return True
+        """Select the OTP application.
+        
+        Returns:
+            True if the application was selected (or selection is not needed).
             
+        Raises:
+            CommunicationError: If the device transport is CCID and the
+                application cannot be selected.
+        """
+        from pypicokey.transport.ccid import CCIDTransport
+        if not isinstance(self._device._transport, CCIDTransport):
+            # For HID transport, we don't need to select
+            self._selected = True
+            return True
+        
+        try:
             # Try to select OTP application (vendor-specific AID)
             otp_aid = bytes.fromhex("A0000005272001")
             _, sw1, sw2 = self._device._transport.select_application(otp_aid)
             
-            if sw1 == 0x90 or sw1 == 0x90:
+            if sw1 == 0x90:
                 self._selected = True
                 return True
-            else:
-                # Some devices auto-select, just mark as selected
-                self._selected = True
-                return True
+            
+            raise CommunicationError(
+                f"Failed to select OTP application: {sw1:02X}{sw2:02X}"
+            )
+        except CommunicationError:
+            raise
         except Exception as e:
-            logger.warning(f"OTP selection issue (may be normal): {e}")
-            self._selected = True
-            return True
+            raise CommunicationError(f"OTP selection failed: {e}") from e
     
     def get_serial(self) -> Optional[int]:
         """Get device serial number.
@@ -213,13 +220,17 @@ class OTPModule:
                 public_bytes = public_bytes[:6]
             public_bytes = public_bytes.ljust(6, b'\x00')
             
+            # Finalize flags first: touch bit + access-code bit
             flags = 0x01 if touch_required else 0x00
+            if access_code:
+                flags |= 0x80
             
+            # Build configuration payload in device-expected order:
+            # [public_id (6)] [private_id (6)] [secret_key (16)] [flags] [access_code (6)]
             payload = public_bytes + private_id + secret_key + bytes([flags])
             
             if access_code:
                 payload += access_code
-                flags |= 0x80  # Set access code flag
             
             # CONFIGURE OTP command
             p2 = slot - 1  # 0 for slot 1, 1 for slot 2
@@ -345,43 +356,62 @@ class OTPModule:
     
     def generate_hotp(self, slot: int) -> str:
         """Generate HOTP code from a slot.
-        
+
         Args:
             slot: Slot number (1 or 2).
-            
+
         Returns:
             HOTP code as string.
-            
+
         Raises:
             ValueError: If slot is invalid.
             CommunicationError: If command fails.
         """
-        return self.generate_otp(slot)
-    
+        self._ensure_selected()
+
+        if slot not in [1, 2]:
+            raise ValueError("Slot must be 1 or 2")
+
+        try:
+            resp, sw1, sw2 = self._device._transport.send_apdu(
+                0x00, self.INS_HOTP, slot - 1, 0x00, le=0
+            )
+
+            if sw1 == 0x90:
+                return resp.hex().upper()
+            else:
+                raise CommunicationError(f"HOTP generation failed: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            if not isinstance(e, (ValueError, CommunicationError)):
+                raise CommunicationError(f"HOTP generation error: {e}") from e
+            raise
+
     def swap_slots(self) -> bool:
         """Swap configurations between slot 1 and slot 2.
-        
+
         Returns:
             True if swap was successful.
-            
+
         Raises:
             CommunicationError: If command fails.
         """
         self._ensure_selected()
-        
+
         try:
             _, sw1, sw2 = self._device._transport.send_apdu(
                 0x00, 0x03, 0x00, 0x00
             )
-            
+
             if sw1 == 0x90:
                 logger.info("Slots swapped successfully")
                 return True
             else:
                 raise CommunicationError(f"Slot swap failed: {sw1:02X}{sw2:02X}")
+        except CommunicationError:
+            raise
         except Exception as e:
             raise CommunicationError(f"Slot swap error: {e}") from e
-    
+
     def wipe_slot(self, slot: int, access_code: Optional[bytes] = None) -> bool:
         """Wipe/clear an OTP slot.
         

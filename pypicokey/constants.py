@@ -33,14 +33,17 @@ class ProductID:
     
     # Pico OpenPGP devices
     PICO_OPENPGP = 0x42C1
-    
+
     # Pico HSM devices
     PICO_HSM = 0x42D1
     PICO_HSM_PLUS = 0x42D2
-    
+
+    # Pico OTP devices (placeholder PID, not yet officially documented)
+    PICO_OTP_PLACEHOLDER = 0x42F0
+
     # Pico Boot (bootloader mode)
     PICO_BOOT = 0x42E1
-    
+
     # Development/unknown
     UNKNOWN = 0x0000
     PICO_KEY_WEB = 0xFCFD
@@ -51,6 +54,9 @@ class DeviceMode(str, Enum):
     
     # FIDO2/U2F mode (HID interface)
     FIDO = "fido"
+    
+    # OTP mode (YubiKey-compatible, HID or CCID interface)
+    OTP = "otp"
     
     # OpenPGP smartcard mode (CCID interface)
     OPENPGP = "openpgp"
@@ -79,7 +85,10 @@ class TransportType(str, Enum):
     
     # Raw USB (for bootloader)
     USB = "usb"
-    
+
+    # USB Mass Storage (RP2040 BOOTSEL flashing)
+    MSD = "msd"
+
     # Unknown transport
     UNKNOWN = "unknown"
     
@@ -111,6 +120,7 @@ KNOWN_DEVICES: dict[tuple[int, int], tuple[str, DeviceMode]] = {
     (VendorID.PICOKEYS, ProductID.PICO_OPENPGP): ("Pico OpenPGP", DeviceMode.OPENPGP),
     (VendorID.PICOKEYS, ProductID.PICO_HSM): ("Pico HSM", DeviceMode.HSM),
     (VendorID.PICOKEYS, ProductID.PICO_HSM_PLUS): ("Pico HSM Plus", DeviceMode.HSM),
+    (VendorID.PICOKEYS, ProductID.PICO_OTP_PLACEHOLDER): ("Pico OTP", DeviceMode.OTP),
     (VendorID.PICOKEYS, ProductID.PICO_BOOT): ("Pico Boot", DeviceMode.BOOT),
     # Pico Key Community/Web Interface
     (VendorID.COMMUNITY, ProductID.PICO_KEY_WEB): ("Pico Key", DeviceMode.FIDO),

@@ -6,13 +6,17 @@ interacting with Pico HSM devices, including support for
 post-quantum cryptography algorithms (future).
 """
 
-from typing import Optional, Any
+from typing import Optional
 from dataclasses import dataclass
 import logging
 
 from pypicokey.device import PicoKeyDevice
 from pypicokey.constants import DeviceMode, HSMState
-from pypicokey.exceptions import UnsupportedModeError, CommunicationError
+from pypicokey.exceptions import (
+    AuthenticationError,
+    CommunicationError,
+    UnsupportedModeError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +24,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HSMInfo:
     """HSM device information."""
-    
+
     state: HSMState
-    version: str
-    total_slots: int
-    used_slots: int
+    version: str | None = None
+    total_slots: int | None = None
+    used_slots: int | None = None
 
 
 @dataclass
@@ -37,7 +41,7 @@ class KeyInfo:
     key_size: int
     algorithm: Optional[str] = None
     extractable: bool = False
-    usage: list[str] = None
+    usage: Optional[list[str]] = None
     
     def __post_init__(self) -> None:
         if self.usage is None:
@@ -67,7 +71,7 @@ PQ_ALGORITHMS = {
         security_level=1,
         public_key_size=800,
         private_key_size=1632,
-        ciphertext_size=768,
+        ciphertext_or_signature_size=768,
         standardized=True
     ),
     "ml-kem-768": PQAlgorithm(
@@ -76,7 +80,7 @@ PQ_ALGORITHMS = {
         security_level=3,
         public_key_size=1184,
         private_key_size=2400,
-        ciphertext_size=1088,
+        ciphertext_or_signature_size=1088,
         standardized=True
     ),
     "ml-kem-1024": PQAlgorithm(
@@ -85,7 +89,7 @@ PQ_ALGORITHMS = {
         security_level=5,
         public_key_size=1568,
         private_key_size=3168,
-        ciphertext_size=1568,
+        ciphertext_or_signature_size=1568,
         standardized=True
     ),
     # ML-DSA (Dilithium) - Digital Signature
@@ -95,7 +99,7 @@ PQ_ALGORITHMS = {
         security_level=2,
         public_key_size=1312,
         private_key_size=2400,
-        signature_size=4628,
+        ciphertext_or_signature_size=4628,
         standardized=True
     ),
     "ml-dsa-65": PQAlgorithm(
@@ -104,7 +108,7 @@ PQ_ALGORITHMS = {
         security_level=3,
         public_key_size=1952,
         private_key_size=4000,
-        signature_size=3309,
+        ciphertext_or_signature_size=3309,
         standardized=True
     ),
     "ml-dsa-87": PQAlgorithm(
@@ -113,7 +117,7 @@ PQ_ALGORITHMS = {
         security_level=5,
         public_key_size=2592,
         private_key_size=4864,
-        signature_size=4595,
+        ciphertext_or_signature_size=4595,
         standardized=True
     ),
     # SLH-DSA (Sphincs+) - Digital Signature (stateless)
@@ -123,7 +127,7 @@ PQ_ALGORITHMS = {
         security_level=1,
         public_key_size=32,
         private_key_size=64,
-        signature_size=7856,
+        ciphertext_or_signature_size=7856,
         standardized=True
     ),
 }
@@ -171,36 +175,113 @@ class HSMModule:
                 raise CommunicationError(f"Failed to select HSM application: {sw1:02X}{sw2:02X}")
         except Exception as e:
             raise CommunicationError(f"HSM selection failed: {e}") from e
-    
+
     def get_info(self) -> HSMInfo:
         """Get HSM device information."""
         self._ensure_selected()
-        
+
         try:
             # Get Info APDU
             resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xCA, 0x01, 0x01, le=0)
-            
+
             state = HSMState.INITIALIZED if sw1 == 0x90 else HSMState.UNINITIALIZED
-            
+
             return HSMInfo(
                 state=state,
-                version="1.0",
-                total_slots=10,
-                used_slots=0
             )
         except Exception as e:
             raise CommunicationError(f"Failed to get HSM info: {e}") from e
-    
+
     def login(self, pin: str, admin: bool = False) -> bool:
-        """Login to the HSM."""
+        """Login to the HSM.
+
+        Returns:
+            True on successful login.
+
+        Raises:
+            AuthenticationError: If the PIN is wrong (includes retries left).
+            CommunicationError: If the command fails.
+        """
         self._ensure_selected()
         try:
             p2 = 0x81 if not admin else 0x82 # PW1 for user, PW2 for SO
             pin_bytes = pin.encode("utf-8")
             _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x20, 0x00, p2, data=pin_bytes)
-            return sw1 == 0x90
+            if sw1 == 0x90:
+                return True
+            elif sw1 == 0x63:
+                raise AuthenticationError("Incorrect PIN", retries_remaining=sw2 & 0x0F)
+            else:
+                raise CommunicationError(f"HSM login failed: {sw1:02X}{sw2:02X}")
+        except AuthenticationError:
+            raise
+        except CommunicationError:
+            raise
         except Exception as e:
             raise CommunicationError(f"HSM login failed: {e}") from e
+
+    def initialize(self, admin_pin: str, user_pin: str, label: Optional[str] = None) -> bool:
+        """Initialize the HSM applet and set its PINs.
+
+        Follows the SmartCard-HSM initialization lifecycle:
+        1. INITIALIZE APPLET (00 28 00 00) resets the applet to a fresh
+           state with default retry counters. This is destructive: all
+           existing keys are lost.
+        2. Set the SO PIN (PW2) and user PIN (PW1) via CHANGE REFERENCE DATA.
+
+        Args:
+            admin_pin: Security Officer (admin) PIN.
+            user_pin: User PIN.
+            label: Optional device label (stored as issuer DO when supported).
+            
+        Returns:
+            True if initialization succeeded.
+            
+        Raises:
+            ValueError: If PINs are too short.
+            CommunicationError: If any step fails.
+        """
+        self._ensure_selected()
+        
+        if len(admin_pin) < 8:
+            raise ValueError("Admin PIN must be at least 8 characters")
+        if len(user_pin) < 4:
+            raise ValueError("User PIN must be at least 4 characters")
+        
+        logger.warning("Initializing HSM applet. Any existing keys will be lost.")
+        
+        try:
+            # 1. INITIALIZE APPLET with device operator key attempts + lifecycle
+            init_data = bytes([0x03]) # Device operator key encryption attempts
+            if label:
+                label_bytes = label.encode("utf-8")[:16]
+                init_data += label_bytes
+            
+            _, sw1, sw2 = self._device._transport.send_apdu(
+                0x00, 0x28, 0x00, 0x00, data=init_data
+            )
+            if sw1 != 0x90:
+                raise CommunicationError(f"HSM initialize failed: {sw1:02X}{sw2:02X}")
+            
+            # 2. Set PINs: PW3 (SO/admin) first, then PW1 (user)
+            for p2, pin in ((0x82, admin_pin), (0x81, user_pin)):
+                pin_bytes = pin.encode("utf-8")
+                _, sw1, sw2 = self._device._transport.send_apdu(
+                    0x00, 0x24, 0x00, p2, data=pin_bytes
+                )
+                if sw1 != 0x90:
+                    role = "admin" if p2 == 0x82 else "user"
+                    raise CommunicationError(
+                        f"Failed to set {role} PIN: {sw1:02X}{sw2:02X}"
+                    )
+            
+            logger.info("HSM initialized successfully")
+            return True
+        except Exception as e:
+            if not isinstance(e, (ValueError, CommunicationError)):
+                raise CommunicationError(f"HSM initialization failed: {e}") from e
+            raise
+
 
     def logout(self) -> bool:
         """Logout from the HSM."""
@@ -320,8 +401,6 @@ class HSMModule:
                 f"Unsupported PQ algorithm: {algorithm}. "
                 f"Supported: {list(PQ_ALGORITHMS.keys())}"
             )
-        
-        algo_spec = PQ_ALGORITHMS[algorithm]
         
         # Check if firmware supports PQ (future feature)
         # For now, this is a placeholder for when hsm.py in SDK is mature

@@ -108,6 +108,13 @@ class TestKnownDevices:
         assert name == "Pico OpenPGP"
         assert mode == DeviceMode.OPENPGP
 
+    def test_pico_otp_discovery_maps_to_otp_mode(self) -> None:
+        """OTP devices must be discoverable via the known-devices table."""
+        key = (VendorID.PICOKEYS, ProductID.PICO_OTP_PLACEHOLDER)
+        assert key in KNOWN_DEVICES
+        name, mode = KNOWN_DEVICES[key]
+        assert mode == DeviceMode.OTP
+
 
 class TestCTAPCommand:
     """Tests for CTAP command constants."""
