@@ -337,15 +337,102 @@ make
 ```bash
 cd pypicokey
 pip install -e ".[dev]"
-pytest
-black pypicokey tests
-```
+## Matriz de Compatibilidade: `pypicokey` vs `pico-keys-sdk`
 
-### Documentação Viva (Recipes)
-Adicione exemplos práticos em `pypicokey/recipes/`:
-- `fido.md` - Receitas FIDO2
-- `openpgp.md` - Receitas OpenPGP
-- `hsm.md` - Receitas HSM
+| Módulo / Funcionalidade | SDK (Firmware - C) | `pypicokey` (Host - Python) | Status | Notas de Implementação |
+| :--- | :--- | :--- | :--- | :--- |
+| **Transporte & Conexão** | | | | |
+| Detecção USB (VID/PID) | `src/usb_descriptors.c` | `manager.py` (libusb/hidapi) | ✅ **Estável** | Suporte a hot-plug e múltiplos dispositivos. |
+| Transporte HID | `src/usb_hid.c` | `transport/hid.py` | ✅ **Estável** | Comunicação bidirecional via reports HID. |
+| Transporte CCID (SmartCard) | `src/usb_ccid.c` | `transport/ccid.py` | ✅ **Estável** | Emulação de leitora SmartCard via USB. |
+| **Protocolos de Segurança** | | | | |
+| FIDO2 / CTAP2 | `modules/fido2/` | `protocols/fido2.py` | ✅ **Estável** | Registro e Autenticação completos. Compatível com WebAuthn. |
+| U2F (Legacy) | `modules/u2f/` | `protocols/u2f.py` | ✅ **Estável** | Retrocompatibilidade mantida. |
+| OpenPGP Card v3 | `modules/openpgp/` | `modules/openpgp.py` | 🔄 **Em Dev** | Funções básicas (chaves RSA/ECC) ok; subchaves e atributos complexos em andamento. |
+| PIV (NIST SP 800-73) | `modules/piv/` | `protocols/piv.py` | 🔄 **Em Dev** | Autenticação funcional; gerenciamento de certificados em expansão. |
+| OTP (YubiKey compat.) | `src/otp/` | `modules/otp.py` | ⚠️ **Planejado** | Mapeamento APDU implementado; aguardando comandos específicos no firmware. |
+| **Criptografia & HSM** | | | | |
+| Geração de Chaves (On-board) | `src/crypto/` | Comandos via Protocolo | ✅ **Estável** | Chaves nunca saem do dispositivo (RSA, ECC). |
+| Assinatura Digital | `src/crypto/` | Comandos via Protocolo | ✅ **Estável** | Suporte a SHA256, SHA384, SHA512. |
+| Criptografia Pós-Quântica (PQ) | `modules/hsm.py` (futuro) | `modules/hsm.py` (esboço) | 🔴 **Futuro** | Algoritmos ML-KEM, ML-DSA, SLH-DSA definidos; aguardando maturação do SDK. |
+| Vault Seguro (Storage) | `src/fs/` | `features/vault.py` | 🔄 **Em Dev** | Leitura/Escrita criptografada no flash do RP2040. |
+| **Gerenciamento** | | | | |
+| Bootloader / DFU | `src/bootloader/` | `tools/bootloader.py` | ✅ **Estável** | Atualização de firmware segura via USB. |
+| Configuração de LED/Buzzer | `src/main.c` | `tools/config.py` | ✅ **Estável** | Feedback tátil e visual personalizável. |
+| Wink (Identificação) | `src/main.c` | `manager.wink()` | ✅ **Estável** | Útil para identificar qual chave física conectar. |
+
+### Legenda de Status
+*   ✅ **Estável**: Funcionalidade completa, testada e pronta para produção.
+*   🔄 **Em Dev**: Funcionalidade principal operante, mas recursos avançados ou edge-cases ainda em implementação.
+*   ⚠️ **Planejado**: Arquitetura definida, código base iniciado, mas não funcional para o usuário final.
+*   🔴 **Futuro**: Roadmap de longo prazo, dependente de evolução do SDK ou demanda da comunidade.
+
+### Áreas Prioritárias para Contribuição
+
+1.  **OpenPGP Avançado** (`modules/openpgp.py`)
+    - [x] Implementar `get_public_key()` para leitura de chaves públicas por slot
+    - [x] Implementar `generate_key()` com suporte a múltiplos algoritmos (RSA, ECC, Brainpool)
+    - [ ] Implementar `reset_retry_counter()` com PIN de admin
+    - [ ] Adicionar suporte a múltiplas chaves simultâneas (subkeys)
+    - [ ] Implementar atributos estendidos de chave (touch policies, PIN policies)
+
+2.  **Módulo OTP** (`modules/otp.py`)
+    - [x] Criar estrutura completa do módulo OTP
+    - [x] Mapear comandos APDU para configuração YubiKey-compatible
+    - [x] Implementar HOTP (RFC 4226) com contador e validação
+    - [ ] Integrar com firmware `src/otp/otp.c` para comandos específicos
+    - [ ] Adicionar suporte a desafio-resposta (challenge-response)
+
+3.  **Criptografia Pós-Quântica** (`modules/hsm.py`)
+    - [x] Definir especificações de algoritmos PQ (ML-KEM, ML-DSA, SLH-DSA)
+    - [x] Implementar interface `get_pq_algorithms()` para consulta
+    - [x] Criar stubs para `generate_pq_key()`, `encapsulate()`, `sign_pq()`
+    - [ ] Aguardar maturação do módulo `hsm.py` no pico-keys-sdk
+    - [ ] Implementar interoperabilidade com bibliotecas PQ (liboqs)
+
+## Guia de Contribuição para Ambos os Projetos
+
+### Para o `pypicokey` (Python)
+
+1. **Escolha uma Issue**: Veja as issues no GitHub marcadas com `good first issue` ou `help wanted`.
+2. **Clone e Configure**:
+   ```bash
+   git clone https://github.com/polhenarejos/pypicokey.git
+   cd pypicokey
+   pip install -e ".[dev]"
+   ```
+3. **Implemente**: Siga os padrões de código (type hints, docstrings, logging).
+4. **Teste**:
+   ```bash
+   pytest tests/
+   black pypicokey tests
+   ```
+5. **Documente**: Adicione exemplos em `pypicokey/recipes/`.
+6. **Submita**: Crie um Pull Request com descrição clara.
+
+### Para o `pico-keys-sdk` (C/Firmware)
+
+1. **Entenda a Arquitetura**: Leia `src/main.c` e `src/apdu.h`.
+2. **Configure o Ambiente**:
+   ```bash
+   git clone https://github.com/polhenarejos/pico-keys-sdk.git
+   cd pico-keys-sdk
+   export PICO_SDK_PATH=/path/to/pico-sdk
+   mkdir build && cd build
+   cmake ..
+   make
+   ```
+3. **Implemente**: Siga o estilo de código existente (indentação, naming conventions).
+4. **Teste em Hardware**: Use um RP2040/RP2350 real.
+5. **Documente**: Atualize comentários no código e README.
+6. **Submita**: Crie um Pull Request explicando as mudanças.
+
+### Integração entre Projetos
+
+Ao contribuir em ambos, garanta que:
+- Os comandos APDU no firmware correspondam aos esperados pelo `pypicokey`.
+- As constantes e códigos de erro sejam consistentes.
+- A documentação de integração seja atualizada.
 
 ## Conclusão
 

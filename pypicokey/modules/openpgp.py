@@ -227,16 +227,50 @@ class OpenPGPModule:
         Raises:
             CommunicationError: If command fails.
         """
-        # TODO: Implement GET PUBLIC KEY command
-        logger.warning("OpenPGPModule.get_public_key() is not yet implemented")
-        raise NotImplementedError("OpenPGP get_public_key not yet implemented")
+        self._ensure_selected()
+        
+        slot_map = {
+            "signature": 0x00,
+            "encryption": 0x01,
+            "authentication": 0x02,
+        }
+        
+        if slot not in slot_map:
+            raise ValueError(f"Invalid slot: {slot}. Must be one of {list(slot_map.keys())}")
+        
+        try:
+            # GET PUBLIC KEY (00 47 80 00) with tag DO for the slot
+            # First, set the correct key reference
+            key_ref = bytes([0xB6 + slot_map[slot]])
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xA4, 0x01, 0x00, data=key_ref)
+            
+            if sw1 != 0x90:
+                raise CommunicationError(f"Failed to select key slot: {sw1:02X}{sw2:02X}")
+            
+            # Now read the public key
+            resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xCA, 0x7F, 0x49, le=0)
+            
+            if sw1 == 0x90 and resp:
+                # Parse TLV to extract the actual public key
+                tags = TLVParser.parse(resp)
+                # Tag 0x86 contains the public key material
+                return tags.get(0x86, resp)
+            elif sw1 == 0x6A and sw2 == 0x88:
+                # Key slot is empty
+                return None
+            else:
+                raise CommunicationError(f"Failed to get public key: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            if not isinstance(e, (CommunicationError, ValueError)):
+                raise CommunicationError(f"Get public key error: {e}") from e
+            raise
     
     def generate_key(self, slot: str, algorithm: str = "rsa2048") -> bytes:
         """Generate a new key pair in a slot.
         
         Args:
             slot: Key slot ("signature", "encryption", or "authentication").
-            algorithm: Key algorithm (e.g., "rsa2048", "cv25519").
+            algorithm: Key algorithm (e.g., "rsa2048", "rsa4096", "cv25519", "nistp256", "nistp384").
             
         Returns:
             Public key bytes.
@@ -244,9 +278,59 @@ class OpenPGPModule:
         Raises:
             CommunicationError: If command fails.
         """
-        # TODO: Implement GENERATE ASYMMETRIC KEY PAIR command
-        logger.warning("OpenPGPModule.generate_key() is not yet implemented")
-        raise NotImplementedError("OpenPGP generate_key not yet implemented")
+        self._ensure_selected()
+        
+        slot_map = {
+            "signature": 0xB6,
+            "encryption": 0xB8,
+            "authentication": 0xA4,
+        }
+        
+        algo_map = {
+            "rsa2048": bytes([0x01]),
+            "rsa4096": bytes([0x02]),
+            "cv25519": bytes([0x12]),
+            "nistp256": bytes([0x13]),
+            "nistp384": bytes([0x14]),
+            "nistp521": bytes([0x15]),
+            "brainpoolp256r1": bytes([0x16]),
+            "brainpoolp384r1": bytes([0x17]),
+            "brainpoolp512r1": bytes([0x18]),
+        }
+        
+        if slot not in slot_map:
+            raise ValueError(f"Invalid slot: {slot}")
+        if algorithm not in algo_map:
+            raise ValueError(f"Unsupported algorithm: {algorithm}. Supported: {list(algo_map.keys())}")
+        
+        try:
+            # Set algorithm attributes first
+            algo_data = algo_map[algorithm]
+            attr_tag = bytes([0xC1 if slot == "signature" else 0xC2 if slot == "encryption" else 0xC3])
+            
+            # PUT DATA for algorithm attributes
+            _, sw1, sw2 = self._device._transport.send_apdu(0x00, 0xDA, 0x00, 
+                                                           0xC1 if slot == "signature" else 0xC2 if slot == "encryption" else 0xC3,
+                                                           data=algo_data)
+            if sw1 != 0x90:
+                raise CommunicationError(f"Failed to set algorithm: {sw1:02X}{sw2:02X}")
+            
+            # GENERATE ASYMMETRIC KEY PAIR (00 47 80 00)
+            # Data contains template with key reference
+            key_ref = bytes([slot_map[slot], 0x00])
+            resp, sw1, sw2 = self._device._transport.send_apdu(0x00, 0x47, 0x80, 0x00, data=key_ref, le=0)
+            
+            if sw1 == 0x90 and resp:
+                logger.info(f"Generated {algorithm} key in {slot} slot")
+                # Parse response to get public key
+                tags = TLVParser.parse(resp)
+                return tags.get(0x86, resp)
+            else:
+                raise CommunicationError(f"Key generation failed: {sw1:02X}{sw2:02X}")
+        except Exception as e:
+            if not isinstance(e, (CommunicationError, ValueError)):
+                raise CommunicationError(f"Key generation error: {e}") from e
+            raise
     
     def factory_reset(self) -> bool:
         """Perform factory reset of the OpenPGP card.
